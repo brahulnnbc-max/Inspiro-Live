@@ -1,13 +1,12 @@
 import type { JEEClass, PushSubscriptionData } from '../types/class.ts';
 
-
+import { createClient } from '@supabase/supabase-js'
 
 import fs from 'fs';
 import path from 'path';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
-const CLASSES_FILE = path.join(DATA_DIR, 'classes.json');
-
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   try {
@@ -17,34 +16,7 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
-function loadPersistedClasses(): JEEClass[] {
-  try {
-    if (fs.existsSync(CLASSES_FILE)) {
-      const raw = fs.readFileSync(CLASSES_FILE, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed; // returns whatever is saved, even if empty []
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to read classes.json:', e);
-  }
-  return [];
-}
 
-function persistClasses() {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(CLASSES_FILE, JSON.stringify(classesStore, null, 2), 'utf8');
-  } catch (e) {
-    console.error('Failed to write classes.json:', e);
-  }
-}
-
-// In-memory data cache synced with persistent disk storage
-let classesStore: JEEClass[] = loadPersistedClasses();
 let subscriptionsStore: PushSubscriptionData[] = [];
 
 export async function getAllClasses(): Promise<JEEClass[]> {
