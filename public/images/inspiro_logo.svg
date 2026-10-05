@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" fill="none">
+  <!-- Left Dot -->
+  <circle cx="38" cy="42" r="7.5" fill="#FF1E1E" />
+
+  <!-- Center 'p' with transparent hollow loop -->
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M 91 46 H 98 C 108.5 46 117 52.5 117 62 C 117 71.5 108.5 78 98 78 H 98 V 84 H 91 V 46 Z M 98 52 C 105 52 110 56 110 62 C 110 68 105 72 98 72 V 52 Z" fill="#FF1E1E" />
+
+  <!-- Vertical tick below 'p' stem -->
+  <rect x="91" y="89" width="7" height="19" rx="0.5" fill="#FF1E1E" />
+
+  <!-- Right Dot -->
+  <circle cx="162" cy="42" r="7.5" fill="#FF1E1E" />
+</svg>
