@@ -1,13 +1,23 @@
 import type { JEEClass, PushSubscriptionData } from '../types/class.ts';
-
-import { createClient } from '@supabase/supabase-js'
-
+import { createClient } from '@supabase/supabase-js';
 import fs from 'fs';
 import path from 'path';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
-// Ensure data directory exists
+
+// Initialize Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+if (!supabaseUrl || !supabaseKey) {
+  console.warn('⚠️ Supabase credentials missing! Falling back to file-based storage.');
+}
+
+const supabase = supabaseUrl && supabaseKey 
+  ? createClient(supabaseUrl, supabaseKey)
+  : null;
+
+// Ensure data directory exists for fallback
 if (!fs.existsSync(DATA_DIR)) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -16,17 +26,104 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
-
 let subscriptionsStore: PushSubscriptionData[] = [];
 
+// =====================================================
+// CLASSES - Now using Supabase with file fallback
+// =====================================================
+
+const CLASSES_FILE = path.join(DATA_DIR, 'classes.json');
+
+function generateInitialClasses(): JEEClass[] {
+  const now = Date.now();
+  return [
+    {
+      id: 'class-physics-rotational',
+      title: 'Rotational Motion: Moment of Inertia & Pure Rolling',
+      subject: 'Physics',
+      faculty: 'Er. R. Sharma (Ex-IIT Delhi)',
+      topic: 'Mechanics (JEE Advanced Level)',
+      description: 'Rigid body dynamics, theorem of parallel & perpendicular axes, and instantaneous center of rotation with previous year question breakdowns.',
+      youtube_url: 'https://www.youtube.com/watch?v=x0_z2_t6a_w',
+      youtube_id: 'x0_z2_t6a_w',
+      start_at: new Date(now - 15 * 60 * 1000).toISOString(),
+      duration_min: 90,
+      is_embeddable: true,
+      notification_15m_sent: false,
+      notification_live_sent: false,
+      created_at: new Date(now - 86400000).toISOString(),
+    },
+  ];
+}
+
+function loadPersistedClasses(): JEEClass[] {
+  try {
+    if (fs.existsSync(CLASSES_FILE)) {
+      const raw = fs.readFileSync(CLASSES_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to read classes.json:', e);
+  }
+  return [];
+}
+
+function persistClasses(classes: JEEClass[]) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(CLASSES_FILE, JSON.stringify(classes, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to write classes.json:', e);
+  }
+}
+
+let classesStore: JEEClass[] = loadPersistedClasses();
+
 export async function getAllClasses(): Promise<JEEClass[]> {
-  // Sort by start_at ascending
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('classes')
+        .select('*')
+        .order('start_at', { ascending: true });
+
+      if (error) throw error;
+      if (data) {
+        classesStore = data as JEEClass[];
+        // Sync to file as backup
+        persistClasses(classesStore);
+        return classesStore;
+      }
+    } catch (err) {
+      console.error('Error fetching from Supabase:', err);
+      // Fall back to in-memory
+    }
+  }
+
   return [...classesStore].sort(
     (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
   );
 }
 
 export async function getClassById(id: string): Promise<JEEClass | null> {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('classes')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error) throw error;
+      return (data as JEEClass) || null;
+    } catch (err) {
+      console.error('Error fetching class by ID:', err);
+    }
+  }
+
   const found = classesStore.find((c) => c.id === id);
   return found || null;
 }
@@ -36,20 +133,50 @@ export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'>): Pr
     ...data,
     id: `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     created_at: new Date().toISOString(),
+    notification_15m_sent: false,
+    notification_live_sent: false,
   };
+
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('classes')
+        .insert([newClass]);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error creating class in Supabase:', err);
+    }
+  }
+
   classesStore.push(newClass);
-  persistClasses();
+  persistClasses(classesStore);
   return newClass;
 }
 
 export async function updateClass(id: string, updates: Partial<JEEClass>): Promise<JEEClass | null> {
   const index = classesStore.findIndex((c) => c.id === id);
   if (index === -1) return null;
+
   classesStore[index] = {
     ...classesStore[index],
     ...updates,
   };
-  persistClasses();
+
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('classes')
+        .update(updates)
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error updating class in Supabase:', err);
+    }
+  }
+
+  persistClasses(classesStore);
   return classesStore[index];
 }
 
@@ -57,21 +184,69 @@ export async function deleteClass(id: string): Promise<boolean> {
   const initialLength = classesStore.length;
   classesStore = classesStore.filter((c) => c.id !== id);
   const deleted = classesStore.length < initialLength;
+
   if (deleted) {
-    persistClasses();
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('classes')
+          .delete()
+          .eq('id', id);
+
+        if (error) throw error;
+      } catch (err) {
+        console.error('Error deleting class in Supabase:', err);
+      }
+    }
+    persistClasses(classesStore);
   }
+
   return deleted;
 }
 
 export async function clearAllClasses(): Promise<void> {
   classesStore = [];
-  persistClasses();
+
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('classes')
+        .delete()
+        .neq('id', ''); // Delete all
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error clearing classes in Supabase:', err);
+    }
+  }
+
+  persistClasses(classesStore);
 }
 
 export async function resetClasses(): Promise<JEEClass[]> {
   classesStore = generateInitialClasses();
-  persistClasses();
-  return getAllClasses();
+
+  if (supabase) {
+    try {
+      // Clear existing
+      await supabase
+        .from('classes')
+        .delete()
+        .neq('id', '');
+
+      // Insert fresh samples
+      const { error } = await supabase
+        .from('classes')
+        .insert(classesStore);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error resetting classes in Supabase:', err);
+    }
+  }
+
+  persistClasses(classesStore);
+  return await getAllClasses();
 }
 
 export async function savePushSubscription(sub: PushSubscriptionData): Promise<void> {
@@ -85,9 +260,10 @@ export async function getPushSubscriptions(): Promise<PushSubscriptionData[]> {
   return [...subscriptionsStore];
 }
 
-// -------------------------------------------------------------
-// Long-Term Persistence: Key Moment Bookmarks
-// -------------------------------------------------------------
+// =====================================================
+// BOOKMARKS - File-based with future Supabase support
+// =====================================================
+
 const BOOKMARKS_FILE = path.join(DATA_DIR, 'bookmarks.json');
 
 export interface ServerBookmark {
@@ -144,9 +320,10 @@ export async function deleteServerBookmark(id: string): Promise<boolean> {
   return false;
 }
 
-// -------------------------------------------------------------
-// Long-Term Persistence: Study Records & Real-Time Hours
-// -------------------------------------------------------------
+// =====================================================
+// STUDY RECORDS - File-based with future Supabase support
+// =====================================================
+
 const STUDY_HOURS_FILE = path.join(DATA_DIR, 'studyHours.json');
 
 export interface ServerStudyRecord {
@@ -191,9 +368,10 @@ export async function saveServerStudyRecords(records: ServerStudyRecord[]): Prom
   persistStudyRecords();
 }
 
-// -------------------------------------------------------------
-// Long-Term Persistence: Class Attendance
-// -------------------------------------------------------------
+// =====================================================
+// ATTENDANCE - File-based with future Supabase support
+// =====================================================
+
 const ATTENDANCE_FILE = path.join(DATA_DIR, 'attendance.json');
 
 export interface ServerAttendanceRecord {
@@ -236,4 +414,3 @@ export async function saveServerAttendance(map: Record<string, ServerAttendanceR
   attendanceStore = { ...attendanceStore, ...map };
   persistAttendance();
 }
-
