@@ -557,7 +557,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
           {/* Note Key Moment */}
           <button
             onClick={handleTriggerBookmark}
-            className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 transition-all flex items-center gap-1.5 shadow-sm"
+            className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 transition-all flex items-center gap-1.5"
             title="Note Important Moment, Formula or Mistake (Shortcut: B)"
           >
             <BookmarkPlus className="w-3.5 h-3.5 text-amber-400" />
@@ -574,7 +574,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
                 setIsBookmarksVaultOpen(true);
               }
             }}
-            className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 transition-all flex items-center gap-1.5 shadow-sm font-mono"
+            className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 transition-all flex items-center gap-1.5"
             title="Open dedicated Moments & Notes Table"
           >
             <Bookmark className="w-3.5 h-3.5 text-amber-400" />
@@ -588,7 +588,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
 
           <button
             onClick={toggleRotateMode}
-            className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-950/40 border border-emerald-500/30 transition-all flex items-center gap-1.5 group"
+            className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-950/40 border border-emerald-500/40 transition-all flex items-center gap-1.5"
             title="Switch to full-screen mobile landscape with live stream bar"
           >
             <RotateCw className="w-3.5 h-3.5 group-hover:rotate-180 transition-transform duration-500 text-slate-950" />
@@ -960,7 +960,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
 
           {/* Floating live indicator badge (Standard Mode) */}
           {!isRotateMode && clockState.status === 'live' && (
-            <div className="absolute top-3 left-4 z-20 flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-950/85 backdrop-blur-md border border-emerald-500/50 shadow-xl text-[11px] font-mono text-white">
+            <div className="absolute top-3 left-4 z-20 flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-950/85 backdrop-blur-md border border-emerald-500/50 shadow-xl text-[11px] font-mono">
               <span className="relative flex h-2.5 w-2.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
@@ -983,7 +983,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
                   showHudControls ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'
                 }`}
               >
-                <div className="bg-slate-950/95 backdrop-blur-md border border-slate-800/90 rounded-xl px-2.5 py-1.5 shadow-2xl flex items-center justify-between gap-2 overflow-x-auto scrollbar-none touch-pan-x">
+                <div className="bg-slate-950/95 backdrop-blur-md border border-slate-800/90 rounded-xl px-2.5 py-1.5 shadow-2xl flex items-center justify-between gap-2 overflow-x-auto scrollbar-none">
                   {/* Left Brand & Exit */}
                   <div className="flex items-center gap-1.5 shrink-0">
                     <InspiroLogo size="sm" showSubtitle={false} className="mr-0.5" />
@@ -1010,7 +1010,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
                     {/* Note Key Moment (Available during live classes in rotate mode) */}
                     <button
                       onClick={handleTriggerBookmark}
-                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-sm"
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 transition-colors flex items-center gap-1.5 whitespace-nowrap"
                       title="Note important lecture moment or mistake (Shortcut: B)"
                     >
                       <BookmarkPlus className="w-3.5 h-3.5 text-amber-400" />
@@ -1136,7 +1136,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
               <div className="flex flex-wrap items-center justify-center gap-3">
                 <button
                   onClick={() => setIsTimerOpen(true)}
-                  className="px-4 py-2 text-xs font-semibold text-emerald-200 bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-800/80 rounded-lg transition-colors flex items-center gap-2 shadow-lg"
+                  className="px-4 py-2 text-xs font-semibold text-emerald-200 bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-800/80 rounded-lg transition-colors flex items-center gap-2"
                 >
                   <Timer className="w-4 h-4 text-emerald-400" />
                   <span>Launch Gap Focus Timer</span>
@@ -1427,7 +1427,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
                                     setIsPlaying(true);
                                   }
                                 }}
-                                className="px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition-all inline-flex items-center gap-1.5 shadow-sm hover:scale-[1.02] active:scale-[0.98]"
+                                className="px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition-all inline-flex items-center gap-1.5 shadow-sm hover:shadow-md"
                                 title={`Jump straight to ${bm.timestampFormatted}`}
                               >
                                 <Play className="w-2.5 h-2.5 fill-current" />
@@ -1581,7 +1581,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
                   onChange={(e) => setBookmarkNote(e.target.value)}
                   placeholder="e.g. Teacher explained shortcut for instantaneous center of zero velocity; do not forget sign convention."
                   rows={3}
-                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/40 transition-colors resize-none"
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/50"
                   autoFocus
                 />
               </div>
@@ -1625,7 +1625,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={handleSaveBookmark}
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-950/40 transition-all flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-950/40 transition-all flex items-center gap-2 hover:scale-[1.02]"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   <span>Save Note Moment</span>
