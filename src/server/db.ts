@@ -1,8 +1,6 @@
 import type { JEEClass, PushSubscriptionData } from '../types/class.ts';
 
 
-  ];
-}
 
 import fs from 'fs';
 import path from 'path';
