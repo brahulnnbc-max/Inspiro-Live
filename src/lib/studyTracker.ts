@@ -94,6 +94,35 @@ export function getAllStudyRecords(): StudyRecord[] {
   return seeded;
 }
 
+// Track server sync
+let hasSyncedStudyRecords = false;
+
+export async function syncServerStudyRecords(): Promise<void> {
+  if (hasSyncedStudyRecords || typeof window === 'undefined') return;
+  try {
+    const res = await fetch('/api/study-records');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.records) && data.records.length > 0) {
+        const local = getAllStudyRecords();
+        const map = new Map<string, StudyRecord>();
+        local.forEach(r => map.set(r.id, r));
+        data.records.forEach((r: StudyRecord) => map.set(r.id, r));
+        const merged = Array.from(map.values());
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        hasSyncedStudyRecords = true;
+        window.dispatchEvent(new CustomEvent('inspiro_study_updated', { detail: merged }));
+      }
+    }
+  } catch (e) {
+    // Ignore
+  }
+}
+
+if (typeof window !== 'undefined') {
+  syncServerStudyRecords();
+}
+
 // Save all records
 function saveStudyRecords(records: StudyRecord[]): void {
   if (typeof window === 'undefined') return;
@@ -101,6 +130,13 @@ function saveStudyRecords(records: StudyRecord[]): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
     // Dispatch custom event for real-time UI synchronization
     window.dispatchEvent(new CustomEvent('inspiro_study_updated', { detail: records }));
+
+    // Long-term server persistence
+    fetch('/api/study-records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records }),
+    }).catch(() => {});
   } catch (e) {
     console.warn('Error saving study records:', e);
   }

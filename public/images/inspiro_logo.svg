@@ -1,13 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" fill="none">
-  <!-- Left Dot -->
-  <circle cx="38" cy="42" r="7.5" fill="#FF1E1E" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 40" fill="none">
+  <defs>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@800;900&amp;display=swap");
+      .inspiro-txt {
+        font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+        font-weight: 900;
+        font-size: 32px;
+        letter-spacing: -0.02em;
+        fill: #FFFFFF;
+      }
+      .live-txt {
+        font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+        font-weight: 900;
+        font-size: 32px;
+        letter-spacing: 0.04em;
+        fill: #EF4444;
+      }
+    </style>
+  </defs>
 
-  <!-- Center 'p' with transparent hollow loop -->
-  <path fill-rule="evenodd" clip-rule="evenodd" d="M 91 46 H 98 C 108.5 46 117 52.5 117 62 C 117 71.5 108.5 78 98 78 H 98 V 84 H 91 V 46 Z M 98 52 C 105 52 110 56 110 62 C 110 68 105 72 98 72 V 52 Z" fill="#FF1E1E" />
-
-  <!-- Vertical tick below 'p' stem -->
-  <rect x="91" y="89" width="7" height="19" rx="0.5" fill="#FF1E1E" />
-
-  <!-- Right Dot -->
-  <circle cx="162" cy="42" r="7.5" fill="#FF1E1E" />
+  <!-- inspiro in white and LIVE in red -->
+  <text x="0" y="30">
+    <tspan class="inspiro-txt">inspiro</tspan>
+    <tspan dx="8" class="live-txt">LIVE</tspan>
+  </text>
 </svg>

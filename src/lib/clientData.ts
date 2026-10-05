@@ -74,28 +74,21 @@ export function generateDefaultClasses(): JEEClass[] {
 
 const STORAGE_KEY = 'inspiro_jee_classes_v2';
 
-// Safe localStorage access
+// Safe localStorage access - respects user deletions even if list is empty
 function getLocalClasses(): JEEClass[] {
-  if (typeof window === 'undefined') return generateDefaultClasses();
+  if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
+    if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed; // Returns whatever user saved, including empty []
       }
     }
   } catch (e) {
     console.warn('localStorage read error:', e);
   }
-
-  const defaults = generateDefaultClasses();
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(defaults));
-  } catch (e) {
-    // Ignore storage quota
-  }
-  return defaults;
+  return [];
 }
 
 function setLocalClasses(classes: JEEClass[]): void {
@@ -110,8 +103,7 @@ function setLocalClasses(classes: JEEClass[]): void {
 /**
  * Universal Class Fetcher
  * Tries the /api/classes endpoint first.
- * If successful, syncs to localStorage and returns server state.
- * If offline or running as static host on Vercel, returns localStorage immediately.
+ * If successful, syncs to localStorage and returns server state (even if empty []).
  */
 export async function fetchAllClasses(): Promise<JEEClass[]> {
   try {
@@ -121,7 +113,7 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
 
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data.classes) && data.classes.length > 0) {
+      if (Array.isArray(data.classes)) {
         setLocalClasses(data.classes);
         return data.classes;
       }
@@ -137,13 +129,6 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
  * Save new class
  */
 export async function saveNewClass(newClass: Omit<JEEClass, 'id' | 'created_at'>): Promise<JEEClass> {
-  const localId = `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-  const created: JEEClass = {
-    ...newClass,
-    id: localId,
-    created_at: new Date().toISOString(),
-  };
-
   try {
     const res = await fetch('/api/classes', {
       method: 'POST',
@@ -164,6 +149,13 @@ export async function saveNewClass(newClass: Omit<JEEClass, 'id' | 'created_at'>
     // Fallback to local
   }
 
+  const localId = `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const created: JEEClass = {
+    ...newClass,
+    id: localId,
+    created_at: new Date().toISOString(),
+  };
+
   const current = getLocalClasses();
   const updated = [...current, created];
   setLocalClasses(updated);
@@ -174,6 +166,12 @@ export async function saveNewClass(newClass: Omit<JEEClass, 'id' | 'created_at'>
  * Delete class
  */
 export async function removeClass(id: string): Promise<boolean> {
+  // 1. Immediately update local storage so deleted class vanishes from UI without re-appearing
+  const current = getLocalClasses();
+  const updated = current.filter(c => c.id !== id);
+  setLocalClasses(updated);
+
+  // 2. Call backend to remove from persistent file
   try {
     await fetch(`/api/classes/${id}`, {
       method: 'DELETE',
@@ -182,14 +180,24 @@ export async function removeClass(id: string): Promise<boolean> {
     // Continue with local delete
   }
 
-  const current = getLocalClasses();
-  const updated = current.filter(c => c.id !== id);
-  setLocalClasses(updated);
   return true;
 }
 
 /**
- * Reset classes to default schedule
+ * Clear all classes (empty timetable)
+ */
+export async function clearAllClassesFromStore(): Promise<boolean> {
+  setLocalClasses([]);
+  try {
+    await fetch('/api/classes/clear', { method: 'POST' });
+  } catch (err) {
+    // Continue
+  }
+  return true;
+}
+
+/**
+ * Reset classes to default schedule (Only if explicitly clicked by admin)
  */
 export async function resetAllClasses(): Promise<JEEClass[]> {
   try {
@@ -218,6 +226,32 @@ export interface ClassAttendance {
   percent: number;
   completed: boolean;
   lastWatchedAt: string;
+}
+
+let hasSyncedAttendance = false;
+
+export async function syncServerAttendance(): Promise<void> {
+  if (hasSyncedAttendance || typeof window === 'undefined') return;
+  try {
+    const res = await fetch('/api/attendance');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.attendance && typeof data.attendance === 'object') {
+        const raw = localStorage.getItem(ATTENDANCE_KEY);
+        const map: Record<string, ClassAttendance> = raw ? JSON.parse(raw) : {};
+        const merged = { ...data.attendance, ...map };
+        localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(merged));
+        hasSyncedAttendance = true;
+        window.dispatchEvent(new CustomEvent('inspiro_attendance_updated'));
+      }
+    }
+  } catch (e) {
+    // Ignore
+  }
+}
+
+if (typeof window !== 'undefined') {
+  syncServerAttendance();
 }
 
 export function recordClassAttendance(
@@ -251,6 +285,13 @@ export function recordClassAttendance(
 
     localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(map));
     window.dispatchEvent(new CustomEvent('inspiro_attendance_updated'));
+
+    // Long-term server persistence
+    fetch('/api/attendance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ attendance: { [classId]: map[classId] } }),
+    }).catch(() => {});
   } catch (e) {
     // Ignore
   }

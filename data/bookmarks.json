@@ -1,0 +1,20 @@
+[
+  {
+    "id": "bm-sample-physics-1",
+    "classId": "class-physics-rotational",
+    "seconds": 125,
+    "timestampFormatted": "02:05",
+    "category": "mistake",
+    "note": "Key condition for pure rolling: friction force can act forwards or backwards depending on the point of application of external force F.",
+    "createdAt": "2026-10-05T08:58:00.000Z"
+  },
+  {
+    "id": "bm-sample-math-1",
+    "classId": "class-math-calculus",
+    "seconds": 310,
+    "timestampFormatted": "05:10",
+    "category": "formula",
+    "note": "King's Property for Definite Integrals: ∫_a^b f(x)dx = ∫_a^b f(a + b - x)dx. Essential for symmetrical trigonometric integrands.",
+    "createdAt": "2026-10-05T09:35:00.000Z"
+  }
+]

@@ -12,15 +12,21 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   app.use(express.json());
+
+  // Health check for Cloud Run / load balancers
+  app.get('/healthz', (_req, res) => {
+    res.status(200).send('OK');
+  });
 
   // Mount API endpoints under /api
   app.use('/api', apiRouter);
 
-  // Vite development middleware mode
-  if (process.env.NODE_ENV !== 'production') {
+  // Vite development middleware mode vs production static serving
+  const isDev = process.env.NODE_ENV === 'development' || (process.env.NODE_ENV !== 'production' && !process.env.PORT);
+  if (isDev) {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,

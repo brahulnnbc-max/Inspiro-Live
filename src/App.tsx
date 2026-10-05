@@ -5,18 +5,21 @@ import { StudentTimetable } from './components/StudentTimetable';
 import { ClassroomPlayer } from './components/ClassroomPlayer';
 import { AdminPanel } from './components/AdminPanel';
 import { FormulaSheetModal } from './components/FormulaSheetModal';
+import { MomentsTable } from './components/MomentsTable';
 import { getLiveClockStatus } from './lib/istTime';
 import { subscribeToPushNotifications, sendTestNotification } from './lib/pushClient';
 import { InspiroLogo } from './components/InspiroLogo';
 import { fetchAllClasses } from './lib/clientData';
 import { checkClassroomNotifications, InAppAlertPayload } from './lib/notificationMonitor';
 import { X, Play, Clock } from 'lucide-react';
+import { AppView } from './components/Navbar';
 
 export default function App() {
   const [classes, setClasses] = useState<JEEClass[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedClass, setSelectedClass] = useState<JEEClass | null>(null);
-  const [activeView, setActiveView] = useState<'timetable' | 'classroom' | 'admin'>('timetable');
+  const [initialSeekSeconds, setInitialSeekSeconds] = useState<number | undefined>(undefined);
+  const [activeView, setActiveView] = useState<AppView>('timetable');
   const [isFormulaModalOpen, setIsFormulaModalOpen] = useState(false);
   const [hasNotifications, setHasNotifications] = useState(false);
   const [activeAlert, setActiveAlert] = useState<InAppAlertPayload | null>(null);
@@ -73,6 +76,8 @@ export default function App() {
       const hash = window.location.hash;
       if (hash === '#admin') {
         setActiveView('admin');
+      } else if (hash === '#moments') {
+        setActiveView('moments');
       } else if (hash.startsWith('#classroom/')) {
         const classId = hash.replace('#classroom/', '');
         const target = classes.find((c) => c.id === classId);
@@ -117,11 +122,20 @@ export default function App() {
 
   const handleSelectClass = (cls: JEEClass) => {
     setSelectedClass(cls);
+    setInitialSeekSeconds(undefined);
     setActiveView('classroom');
     window.location.hash = `#classroom/${cls.id}`;
   };
 
+  const handleGoToMoment = (targetClass: JEEClass, seconds: number) => {
+    setSelectedClass(targetClass);
+    setInitialSeekSeconds(seconds);
+    setActiveView('classroom');
+    window.location.hash = `#classroom/${targetClass.id}`;
+  };
+
   const handleBackToTimetable = () => {
+    setInitialSeekSeconds(undefined);
     setActiveView('timetable');
     window.location.hash = '#timetable';
   };
@@ -148,10 +162,7 @@ export default function App() {
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2.5">
               {activeAlert.type === 'live' ? (
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500 shadow-[0_0_10px_#ef4444]"></span>
-                </span>
+                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_#ef4444]"></span>
               ) : (
                 <Clock className="w-4 h-4 text-amber-400" />
               )}
@@ -219,6 +230,19 @@ export default function App() {
                 jeeClass={selectedClass}
                 onBack={handleBackToTimetable}
                 openFormulaModal={() => setIsFormulaModalOpen(true)}
+                initialSeekSeconds={initialSeekSeconds}
+                onOpenMomentsTable={() => {
+                  setActiveView('moments');
+                  window.location.hash = '#moments';
+                }}
+              />
+            )}
+
+            {activeView === 'moments' && (
+              <MomentsTable
+                classes={classes}
+                onGoToMoment={handleGoToMoment}
+                onBackToTimetable={handleBackToTimetable}
               />
             )}
 

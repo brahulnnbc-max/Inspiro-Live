@@ -11,6 +11,14 @@ import {
   savePushSubscription,
   getPushSubscriptions,
   resetClasses,
+  clearAllClasses,
+  getAllServerBookmarks,
+  addServerBookmark,
+  deleteServerBookmark,
+  getAllServerStudyRecords,
+  saveServerStudyRecords,
+  getServerAttendance,
+  saveServerAttendance,
 } from './db.ts';
 import { extractYouTubeId, verifyYouTubeEmbeddability } from '../lib/youtube.ts';
 import { checkScheduleOverlap } from '../lib/overlap.ts';
@@ -58,6 +66,16 @@ apiRouter.post('/classes/reset', async (req: Request, res: Response) => {
   try {
     const classes = await resetClasses();
     res.json({ success: true, classes });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2b. Clear all classes from timetable
+apiRouter.post('/classes/clear', async (req: Request, res: Response) => {
+  try {
+    await clearAllClasses();
+    res.json({ success: true, classes: [] });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -303,3 +321,84 @@ apiRouter.get('/cron/check-notifications', async (req: Request, res: Response) =
     res.status(500).json({ error: err.message });
   }
 });
+
+// -------------------------------------------------------------
+// Long-Term Persistence Routes: Bookmarks, Study Hours, Attendance
+// -------------------------------------------------------------
+
+// Bookmarks
+apiRouter.get('/bookmarks', async (req: Request, res: Response) => {
+  try {
+    const list = await getAllServerBookmarks();
+    res.json({ bookmarks: list });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/bookmarks', async (req: Request, res: Response) => {
+  try {
+    const bm = req.body;
+    if (!bm || !bm.classId || typeof bm.seconds !== 'number') {
+      return res.status(400).json({ error: 'Missing required bookmark parameters' });
+    }
+    const saved = await addServerBookmark(bm);
+    res.status(201).json({ success: true, bookmark: saved });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.delete('/bookmarks/:id', async (req: Request, res: Response) => {
+  try {
+    const deleted = await deleteServerBookmark(req.params.id);
+    res.json({ success: deleted });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Study Records (Hours tracked)
+apiRouter.get('/study-records', async (req: Request, res: Response) => {
+  try {
+    const records = await getAllServerStudyRecords();
+    res.json({ records });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/study-records', async (req: Request, res: Response) => {
+  try {
+    const { records } = req.body;
+    if (Array.isArray(records)) {
+      await saveServerStudyRecords(records);
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Attendance Records
+apiRouter.get('/attendance', async (req: Request, res: Response) => {
+  try {
+    const map = await getServerAttendance();
+    res.json({ attendance: map });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/attendance', async (req: Request, res: Response) => {
+  try {
+    const { attendance } = req.body;
+    if (attendance && typeof attendance === 'object') {
+      await saveServerAttendance(attendance);
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+

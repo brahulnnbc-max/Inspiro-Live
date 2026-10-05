@@ -1,5 +1,5 @@
 import { JEEClass } from '../types/class';
-import { playClassroomChime } from './pushClient';
+import { playClassroomChime, playLiveStartRings } from './pushClient';
 
 const ALERTS_FIRED_KEY = 'inspiro_alerts_fired_v2';
 
@@ -103,7 +103,8 @@ export function checkClassroomNotifications(classes: JEEClass[]): void {
     // 2. Real-Time Live Now Alert (T = 0)
     if (diffMin <= 0 && diffMin >= -3 && !isAlertFired(cls.id, 'live')) {
       markAlertFired(cls.id, 'live');
-      playClassroomChime();
+      // Rings 3 times when any live class starts
+      playLiveStartRings(3);
 
       const title = `🔴 Class is LIVE NOW!`;
       const body = `${cls.subject}: "${cls.title}" stream is broadcasting in lockstep with IST. Join now!`;

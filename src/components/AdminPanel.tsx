@@ -22,7 +22,8 @@ import { extractYouTubeId, verifyYouTubeEmbeddability } from '../lib/youtube';
 import { checkScheduleOverlap } from '../lib/overlap';
 import { formatISTDateTime, formatISTTime } from '../lib/istTime';
 import { sendTestNotification } from '../lib/pushClient';
-import { saveNewClass, removeClass, resetAllClasses, fetchAllClasses } from '../lib/clientData';
+import { saveNewClass, removeClass, resetAllClasses, fetchAllClasses, clearAllClassesFromStore } from '../lib/clientData';
+import { InspiroLogo } from './InspiroLogo';
 
 interface Props {
   classes: JEEClass[];
@@ -384,7 +385,7 @@ export const AdminPanel: React.FC<Props> = ({
     }
   };
 
-  // Reset timetable to initial sample lectures
+  // Reset timetable to initial sample lectures (manual only)
   const handleResetTimetable = async () => {
     try {
       await resetAllClasses();
@@ -401,14 +402,37 @@ export const AdminPanel: React.FC<Props> = ({
     }
   };
 
+  // Clear all classes from timetable completely
+  const handleClearAll = async () => {
+    if (!window.confirm('Are you sure you want to remove ALL classes from the timetable? This cannot be undone.')) {
+      return;
+    }
+    try {
+      await clearAllClassesFromStore();
+      await onRefreshClasses();
+      setFormStatus({
+        type: 'success',
+        message: 'All scheduled classes removed from timetable.',
+      });
+    } catch (err: any) {
+      setFormStatus({
+        type: 'error',
+        message: 'Clear failed: ' + (err.message || 'Unknown error'),
+      });
+    }
+  };
+
   // Login view if unauthenticated
   if (!isAuthenticated) {
     return (
       <div className="max-w-md mx-auto px-4 py-16">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
-          <div className="text-center space-y-2">
-            <div className="w-12 h-12 rounded-xl bg-slate-800 border border-slate-700 mx-auto flex items-center justify-center text-sky-400">
-              <Lock className="w-6 h-6" />
+          <div className="text-center space-y-3">
+            <div className="flex justify-center pb-1">
+              <InspiroLogo size="md" showSubtitle={true} />
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-slate-800/80 border border-slate-700/80 mx-auto flex items-center justify-center text-sky-400">
+              <Lock className="w-5 h-5" />
             </div>
             <h1 className="text-xl font-bold text-white">JEE LiveSync Faculty Admin</h1>
             <p className="text-xs text-slate-400">
@@ -483,12 +507,21 @@ export const AdminPanel: React.FC<Props> = ({
 
         <div className="flex items-center gap-3">
           <button
+            onClick={handleClearAll}
+            className="px-3 py-1.5 text-xs font-medium text-rose-300 bg-rose-950/30 border border-rose-900/60 hover:bg-rose-900/30 rounded-lg transition-colors flex items-center gap-1.5"
+            title="Delete all scheduled classes from the timetable"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+            <span>Clear All Classes</span>
+          </button>
+
+          <button
             onClick={handleResetTimetable}
             className="px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-900 border border-slate-800 hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1.5"
             title="Reset timetable to fresh sample classes"
           >
             <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-            <span>Reset Timetable</span>
+            <span>Reset Samples</span>
           </button>
 
           <button
