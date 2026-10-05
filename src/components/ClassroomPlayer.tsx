@@ -1764,4 +1764,4 @@ export const ClassroomPlayer: React.FC<Props> = ({
       )}
     </div>
   );
-);
+};
