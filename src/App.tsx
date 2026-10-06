@@ -15,8 +15,21 @@ import { X, Play, Clock } from 'lucide-react';
 import { AppView } from './components/Navbar';
 
 export default function App() {
-  const [classes, setClasses] = useState<JEEClass[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [classes, setClasses] = useState<JEEClass[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw =
+          localStorage.getItem('inspiro_jee_classes_v2') ||
+          localStorage.getItem('inspiro_jee_classes_backup_v2');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) return parsed;
+        }
+      } catch {}
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState(false);
   const [selectedClass, setSelectedClass] = useState<JEEClass | null>(null);
   const [initialSeekSeconds, setInitialSeekSeconds] = useState<number | undefined>(undefined);
   const [activeView, setActiveView] = useState<AppView>('timetable');
