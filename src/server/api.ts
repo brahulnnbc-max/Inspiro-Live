@@ -26,18 +26,14 @@ import { checkScheduleOverlap } from '../lib/overlap.ts';
 
 export const apiRouter = Router();
 
-// Configure Web Push if keys are present
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@jeelivesync.edu';
-
-if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-  try {
-    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-  } catch (err) {
-    console.warn('VAPID setup warning:', err);
-  }
-}
+// Disable caching across Vercel Edge CDN, proxies, and browsers
+apiRouter.use((_req: Request, res: Response, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.set('Surrogate-Control', 'no-store');
+  next();
+});
 
 // 1. Get all scheduled classes
 apiRouter.get('/classes', async (req: Request, res: Response) => {
