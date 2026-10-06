@@ -1,5 +1,5 @@
 {
-  "name": "JEE LiveSync Classroom",
+  "name": "inspiro LIVE",
   "description": "Synchronized, distraction-free live-style YouTube classroom timetable and clock-locked player for JEE aspirants.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
