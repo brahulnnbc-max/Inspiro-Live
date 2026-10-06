@@ -43,14 +43,30 @@ export function normalizeSubject(subject: string): 'Physics' | 'Chemistry' | 'Ma
 // Cloud Persistence via Supabase REST API (Zero external npm packages needed)
 // -------------------------------------------------------------
 function getSupabaseConfig(): { url: string; key: string } | null {
-  let rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
-  const key =
+  let rawUrl = (
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_URL ||
+    'https://olcstsgeumabfzvaubbz.supabase.co'
+  ).trim();
+  const key = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     process.env.SUPABASE_ANON_KEY ||
-    '';
+    ''
+  ).trim();
 
   if (!rawUrl || !key) return null;
+
+  // Ignore default template / placeholder values that cause ENOTFOUND errors
+  if (
+    rawUrl.includes('your-project') ||
+    rawUrl.includes('placeholder') ||
+    rawUrl.includes('example.com') ||
+    key.includes('your-') ||
+    key.includes('placeholder')
+  ) {
+    return null;
+  }
 
   // Auto-normalize if user pasted postgresql:// connection string instead of https://
   if (rawUrl.startsWith('postgresql://') || rawUrl.startsWith('postgres://')) {

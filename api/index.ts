@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 
 // Health checks
-app.get(['/api/health', '/api/healthz'], (_req, res) => {
+app.get(['/api/health', '/api/healthz', '/health', '/healthz'], (_req, res) => {
   res.status(200).send('OK');
 });
 
