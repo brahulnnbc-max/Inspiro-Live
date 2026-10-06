@@ -145,8 +145,13 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
   const effectiveLocal: JEEClass[] = local !== null ? local : (backup.length > 0 ? backup : []);
 
   try {
-    const res = await fetch('/api/classes', {
-      headers: { Accept: 'application/json' },
+    const res = await fetch(`/api/classes?_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
     });
 
     if (res.ok) {
@@ -368,4 +373,4 @@ export function getAllAttendance(): Record<string, ClassAttendance> {
   } catch (e) {
     return {};
   }
-    }
+}
