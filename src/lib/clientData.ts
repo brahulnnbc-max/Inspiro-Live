@@ -40,11 +40,10 @@ function setLocalClasses(classes: JEEClass[]): void {
  */
 export async function fetchAllClasses(): Promise<JEEClass[]> {
   try {
-    const res = await fetch('/api/classes', {
-  headers: { 'Accept': 'application/json' },
-  cache: 'no-store',
-});
-
+    const res = await fetch(`/api/classes?t=${Date.now()}`, {
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store',
+    });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.classes)) {
@@ -52,10 +51,7 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
         return data.classes;
       }
     }
-  } catch (err) {
-    // Network / static host fallback
-  }
-
+  } catch (err) {}
   return getLocalClasses();
 }
 
@@ -122,11 +118,17 @@ export async function removeClass(id: string): Promise<boolean> {
  * Clear all classes (empty timetable)
  */
 export async function clearAllClassesFromStore(): Promise<boolean> {
-  setLocalClasses([]);
   try {
-    await fetch('/api/classes/clear', { method: 'POST' });
-  } catch (err) {
-    // Continue
+    await fetch(`/api/classes/clear?t=${Date.now()}`, { 
+      method: 'POST',
+      cache: 'no-store',
+    });
+    await new Promise(r => setTimeout(r, 600));
+    const res = await fetch(`/api/classes?t=${Date.now()}`, { cache: 'no-store' });
+    const data = await res.json();
+    setLocalClasses(Array.isArray(data.classes) ? data.classes : []);
+  } catch {
+    setLocalClasses([]);
   }
   return true;
 }
