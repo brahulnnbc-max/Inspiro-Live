@@ -2,9 +2,8 @@ import { JEEClass } from '../types/class';
 
 // Fallback initial classes relative to the current IST time
 export function generateDefaultClasses(): JEEClass[] {
-  const now = Date.now();
-
-  return [
+  return [];
+}
     {
       id: 'class-physics-rotational',
       title: 'Rotational Motion: Moment of Inertia & Pure Rolling',
