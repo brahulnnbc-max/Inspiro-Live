@@ -31,7 +31,7 @@ let subscriptionsStore: PushSubscriptionData[] = [];
 // =====================================================
 // CLASSES - Now using Supabase with file fallback
 // =====================================================
-}
+
 
 export async function savePushSubscription(sub: PushSubscriptionData): Promise<void> {
   const exists = subscriptionsStore.find((s) => s.endpoint === sub.endpoint);
