@@ -22,7 +22,7 @@ import { extractYouTubeId, verifyYouTubeEmbeddability } from '../lib/youtube';
 import { checkScheduleOverlap } from '../lib/overlap';
 import { formatISTDateTime, formatISTTime } from '../lib/istTime';
 import { sendTestNotification } from '../lib/pushClient';
-import { saveNewClass, removeClass, resetAllClasses, fetchAllClasses, clearAllClassesFromStore } from '../lib/clientData';
+import { saveNewClass, removeClass, resetAllClasses, fetchAllClasses, clearAllClassesFromStore, markScheduleCustomized } from '../lib/clientData';
 import { InspiroLogo } from './InspiroLogo';
 
 interface Props {
@@ -356,6 +356,8 @@ export const AdminPanel: React.FC<Props> = ({
       const current = await fetchAllClasses();
       const updated = current.map(c => c.id === editingClass.id ? editingClass : c);
       localStorage.setItem('inspiro_jee_classes_v2', JSON.stringify(updated));
+      localStorage.setItem('inspiro_jee_classes_backup_v2', JSON.stringify(updated));
+      markScheduleCustomized();
 
       setEditingClass(null);
       setFormStatus({
@@ -386,39 +388,36 @@ export const AdminPanel: React.FC<Props> = ({
   };
 
   // Reset timetable = FORCE EMPTY - no sample lectures anymore
-const handleResetTimetable = async () => {
-  if (!window.confirm('This will DELETE ALL classes and make timetable empty. Continue?')) return;
-  try {
-    localStorage.removeItem('inspiro_jee_classes_v2');
-    await clearAllClassesFromStore();
-    await fetch('/api/classes/clear', { method: 'POST' });
-    await onRefreshClasses();
-    setFormStatus({
-      type: 'success',
-      message: 'Timetable is now completely empty. No sample classes will return.',
-    });
-  } catch (err: any) {
-    setFormStatus({
-      type: 'error',
-      message: 'Reset failed: ' + (err.message || 'Unknown error'),
-    });
-  }
-};
+  const handleResetTimetable = async () => {
+    if (!window.confirm('This will DELETE ALL classes and make timetable empty. Continue?')) return;
+    try {
+      await clearAllClassesFromStore();
+      await fetch('/api/classes/clear', { method: 'POST' });
+      await onRefreshClasses();
+      setFormStatus({
+        type: 'success',
+        message: 'Timetable is now completely empty. No sample classes will return.',
+      });
+    } catch (err: any) {
+      setFormStatus({
+        type: 'error',
+        message: 'Reset failed: ' + (err.message || 'Unknown error'),
+      });
+    }
+  };
 
   // Clear all classes from timetable completely
-const handleClearAll = async () => {
-  if (!window.confirm('Remove ALL classes? This cannot be undone.')) return;
-  try {
-    localStorage.removeItem('inspiro_jee_classes_v2');
-    localStorage.setItem('inspiro_jee_classes_v2', JSON.stringify([]));
-    await clearAllClassesFromStore();
-    await fetch('/api/classes/clear', { method: 'POST', cache: 'no-store' });
-    await onRefreshClasses();
-    setFormStatus({ type: 'success', message: 'All classes removed - timetable empty.' });
-  } catch (err: any) {
-    setFormStatus({ type: 'error', message: 'Clear failed: ' + err.message });
-  }
-};
+  const handleClearAll = async () => {
+    if (!window.confirm('Remove ALL classes? This cannot be undone.')) return;
+    try {
+      await clearAllClassesFromStore();
+      await fetch('/api/classes/clear', { method: 'POST', cache: 'no-store' });
+      await onRefreshClasses();
+      setFormStatus({ type: 'success', message: 'All classes removed - timetable empty.' });
+    } catch (err: any) {
+      setFormStatus({ type: 'error', message: 'Clear failed: ' + err.message });
+    }
+  };
   // Login view if unauthenticated
   if (!isAuthenticated) {
     return (

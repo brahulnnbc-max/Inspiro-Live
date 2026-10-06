@@ -31,15 +31,11 @@ async function startServer() {
   const app = createExpressApp();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-  // Vite development middleware mode vs production static serving
-  const isDev =
-    process.env.NODE_ENV === 'development' ||
-    (process.env.NODE_ENV !== 'production' && !process.env.PORT && !process.env.K_SERVICE);
-
+  const isProduction = process.env.NODE_ENV === 'production';
   const distPath = path.resolve(__dirname, 'dist');
   const indexPath = path.resolve(distPath, 'index.html');
 
-  if (isDev && !fs.existsSync(indexPath)) {
+  if (!isProduction) {
     try {
       const vite = await createViteServer({
         server: {
@@ -63,18 +59,7 @@ async function startServer() {
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
       } else {
-        res.status(200).send(`<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>inspiro - Synchronized JEE Classroom</title>
-  </head>
-  <body class="bg-[#0b0f17] text-white">
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>`);
+        res.sendFile(path.resolve(__dirname, 'index.html'));
       }
     });
   }

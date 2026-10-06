@@ -18,14 +18,14 @@ export const DUMMY_IDS = new Set([
 ]);
 
 export function isDummyClass(cls: any): boolean {
-  if (!cls) return false;
+  if (!cls) return true;
   if (cls.id && DUMMY_IDS.has(cls.id)) return true;
   const title = (cls.title || '').trim().toLowerCase();
   if (
-    title.includes('rotational motion: moment of inertia') ||
-    title.includes('electrostatics & gauss law') ||
-    title.includes('definite integration & area under curves') ||
-    title.includes('coordination chemistry & crystal field')
+    title.includes('rotational motion') ||
+    title.includes('electrostatics') ||
+    title.includes('definite integration') ||
+    title.includes('coordination chemistry')
   ) {
     return true;
   }
@@ -46,7 +46,7 @@ function getSupabaseConfig(): { url: string; key: string } | null {
   let rawUrl = (
     process.env.NEXT_PUBLIC_SUPABASE_URL ||
     process.env.SUPABASE_URL ||
-    'https://olcstsgeumabfzvaubbz.supabase.co'
+    ''
   ).trim();
   const key = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
@@ -94,14 +94,21 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const CLASSES_FILE = path.join(DATA_DIR, 'classes.json');
-
-if (!fs.existsSync(DATA_DIR)) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  } catch (e) {}
-}
+const TMP_CLASSES_FILE = path.join('/tmp', 'inspiro_classes.json');
 
 function loadPersistedClasses(): JEEClass[] {
+  // 1. Try writable /tmp first (persists across warm lambda invocations in serverless)
+  try {
+    if (fs.existsSync(TMP_CLASSES_FILE)) {
+      const raw = fs.readFileSync(TMP_CLASSES_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((c) => !isDummyClass(c));
+      }
+    }
+  } catch (e) {}
+
+  // 2. Try repo data/classes.json
   try {
     if (fs.existsSync(CLASSES_FILE)) {
       const raw = fs.readFileSync(CLASSES_FILE, 'utf8');
@@ -115,15 +122,21 @@ function loadPersistedClasses(): JEEClass[] {
 }
 
 function persistClasses(): void {
+  const clean = classesStore.filter((c) => !isDummyClass(c));
+  const dataStr = JSON.stringify(clean, null, 2);
+
+  // Write to /tmp (always writable in Vercel serverless / Lambda / Cloud Run)
+  try {
+    fs.writeFileSync(TMP_CLASSES_FILE, dataStr, 'utf8');
+  } catch (e) {}
+
+  // Write to data/classes.json (for local development & persistent disk)
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    const clean = classesStore.filter((c) => !isDummyClass(c));
-    fs.writeFileSync(CLASSES_FILE, JSON.stringify(clean, null, 2), 'utf8');
-  } catch (e) {
-    console.error('Failed to write classes.json:', e);
-  }
+    fs.writeFileSync(CLASSES_FILE, dataStr, 'utf8');
+  } catch (e) {}
 }
 
 let classesStore: JEEClass[] = loadPersistedClasses();
@@ -385,8 +398,10 @@ export async function syncClasses(clientClasses: JEEClass[]): Promise<JEEClass[]
 
   // Strip all dummy classes immediately
   const cleanList = clientClasses.filter((c) => !isDummyClass(c));
-  const config = getSupabaseConfig();
+  classesStore = cleanList;
+  persistClasses();
 
+  const config = getSupabaseConfig();
   if (config && cleanList.length > 0) {
     try {
       for (const cls of cleanList) {
@@ -431,13 +446,12 @@ export async function syncClasses(clientClasses: JEEClass[]): Promise<JEEClass[]
           }
         }
       }
-      return await getAllClasses();
     } catch (e) {
       console.warn('Supabase syncClasses warning:', e);
     }
   }
 
-  return getAllClasses();
+  return cleanList;
 }
 
 export async function savePushSubscription(sub: PushSubscriptionData): Promise<void> {

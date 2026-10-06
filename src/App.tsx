@@ -105,9 +105,7 @@ export default function App() {
       }
     };
 
-    if (classes.length > 0) {
-      handleHash();
-    }
+    handleHash();
 
     window.addEventListener('hashchange', handleHash);
     return () => window.removeEventListener('hashchange', handleHash);

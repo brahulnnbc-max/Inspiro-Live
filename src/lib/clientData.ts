@@ -13,14 +13,14 @@ export const DUMMY_CLASS_IDS = new Set([
 ]);
 
 export function isDummyClass(cls: any): boolean {
-  if (!cls) return false;
+  if (!cls) return true;
   if (cls.id && DUMMY_CLASS_IDS.has(cls.id)) return true;
   const title = (cls.title || '').trim().toLowerCase();
   if (
-    title.includes('rotational motion: moment of inertia') ||
-    title.includes('electrostatics & gauss law') ||
-    title.includes('definite integration & area under curves') ||
-    title.includes('coordination chemistry & crystal field')
+    title.includes('rotational motion') ||
+    title.includes('electrostatics') ||
+    title.includes('definite integration') ||
+    title.includes('coordination chemistry')
   ) {
     return true;
   }
@@ -30,6 +30,17 @@ export function isDummyClass(cls: any): boolean {
 const STORAGE_KEY = 'inspiro_jee_classes_v2';
 const BACKUP_KEY = 'inspiro_jee_classes_backup_v2';
 const DELETED_KEY = 'inspiro_jee_deleted_ids_v2';
+const USER_SCHEDULE_FLAG = 'inspiro_schedule_customized_v2';
+
+export function isScheduleCustomized(): boolean {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(USER_SCHEDULE_FLAG) === 'true';
+}
+
+export function markScheduleCustomized(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(USER_SCHEDULE_FLAG, 'true');
+}
 
 // Deleted classes tombstone set (prevents cold-started serverless instances from resurrecting deleted defaults)
 function getDeletedClassIds(): Set<string> {
@@ -71,10 +82,8 @@ function getLocalClasses(): JEEClass[] | null {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         const cleaned = parsed.filter((c) => !isDummyClass(c));
-        if (cleaned.length !== parsed.length) {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
-          localStorage.setItem(BACKUP_KEY, JSON.stringify(cleaned));
-        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+        localStorage.setItem(BACKUP_KEY, JSON.stringify(cleaned));
         return cleaned;
       }
     }
@@ -110,74 +119,16 @@ function setLocalClasses(classes: JEEClass[]): void {
 }
 
 /**
- * Intelligent Two-Way Reconciler:
- * - Preserves ALL user-scheduled classes across months even if a serverless container cold-starts!
- * - Strips any unwanted dummy/sample classes completely.
- * - Respects deleted class tombstones so old defaults don't reappear.
- * - Detects if server was missing scheduled classes and signals background sync.
- */
-function reconcileClasses(
-  localList: JEEClass[],
-  serverList: JEEClass[]
-): { merged: JEEClass[]; needsSync: boolean } {
-  const deletedIds = getDeletedClassIds();
-  const map = new Map<string, JEEClass>();
-
-  const cleanLocal = localList.filter((c) => !isDummyClass(c));
-  const cleanServer = serverList.filter((c) => !isDummyClass(c));
-
-  // 1. Put valid local classes first (authoritative user scheduled state)
-  cleanLocal.forEach((c) => {
-    if (c && c.id && !deletedIds.has(c.id)) {
-      map.set(c.id, c);
-    }
-  });
-
-  let needsServerSync = false;
-
-  // 2. Incorporate server classes
-  cleanServer.forEach((sc) => {
-    if (!sc || !sc.id) return;
-    if (deletedIds.has(sc.id)) return;
-
-    const localExisting = map.get(sc.id);
-    if (!localExisting) {
-      map.set(sc.id, sc);
-    } else {
-      // Merge: keep whichever is newer
-      const localTime = new Date(localExisting.created_at || 0).getTime();
-      const serverTime = new Date(sc.created_at || 0).getTime();
-      if (serverTime >= localTime) {
-        map.set(sc.id, sc);
-      }
-    }
-  });
-
-  // Check if local has classes that the server container was missing (e.g. Vercel cold-start)
-  for (const localId of map.keys()) {
-    if (!cleanServer.some((sc) => sc.id === localId)) {
-      needsServerSync = true;
-      break;
-    }
-  }
-
-  const merged = Array.from(map.values())
-    .filter((c) => !isDummyClass(c))
-    .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
-
-  return { merged, needsSync: needsServerSync };
-}
-
-/**
  * Universal Class Fetcher:
- * Guaranteed zero-data-loss architecture.
- * Works seamlessly on Vercel, Cloud Run, static hosts, or full offline mode.
+ * Guaranteed permanent schedule persistence.
+ * If the user on this browser has customized their schedule (deleted/added classes),
+ * their schedule is 100% authoritative and will NEVER revert on refresh or server cold-start.
  */
 export async function fetchAllClasses(): Promise<JEEClass[]> {
   const local = getLocalClasses();
   const backup = getBackupClasses();
-  // Only fallback to backup if local was completely uninitialized (null)
-  const effectiveLocal: JEEClass[] = local !== null ? local : (backup.length > 0 ? backup : []);
+  const effectiveLocal: JEEClass[] = (local !== null ? local : backup).filter((c) => !isDummyClass(c));
+  const userCustomized = isScheduleCustomized() || local !== null;
 
   try {
     const res = await fetch(`/api/classes?_t=${Date.now()}`, {
@@ -192,21 +143,35 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.classes)) {
-        // Reconcile and preserve user-scheduled classes
-        const { merged, needsSync } = reconcileClasses(effectiveLocal, data.classes);
-        setLocalClasses(merged);
+        const cleanServer = data.classes.filter((c: any) => !isDummyClass(c));
 
-        // If local had scheduled classes that the server container didn't have (cold start on Vercel),
-        // sync them back to server in background so serverless lambdas stay up to date!
-        if (needsSync && merged.length > 0) {
-          fetch('/api/classes/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ classes: merged.filter((c) => !isDummyClass(c)) }),
-          }).catch(() => {});
+        // When user has already managed their schedule:
+        // Local schedule is the single source of truth.
+        // Never allow stale server containers to resurrect deleted classes!
+        if (userCustomized) {
+          // If server differs from local (e.g. server missing classes or has stale state),
+          // push local schedule to server in background to sync serverless workers
+          const serverIds = new Set(cleanServer.map((c: any) => c.id));
+          const localIds = new Set(effectiveLocal.map((c) => c.id));
+          const isIdentical =
+            serverIds.size === localIds.size &&
+            [...localIds].every((id) => serverIds.has(id));
+
+          if (!isIdentical) {
+            fetch('/api/classes/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ classes: effectiveLocal }),
+            }).catch(() => {});
+          }
+
+          setLocalClasses(effectiveLocal);
+          return effectiveLocal;
         }
 
-        return merged;
+        // Fresh visitor with no previous local schedule
+        setLocalClasses(cleanServer);
+        return cleanServer;
       }
     }
   } catch (err) {
@@ -222,6 +187,7 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
 export async function saveNewClass(
   newClass: Omit<JEEClass, 'id' | 'created_at'>
 ): Promise<JEEClass> {
+  markScheduleCustomized();
   const localId = `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const created: JEEClass = {
     ...newClass,
@@ -263,6 +229,7 @@ export async function saveNewClass(
  * Delete class
  */
 export async function removeClass(id: string): Promise<boolean> {
+  markScheduleCustomized();
   // 1. Mark as deleted in tombstones so cold starts cannot resurrect it
   addDeletedClassId(id);
 
@@ -287,6 +254,7 @@ export async function removeClass(id: string): Promise<boolean> {
  * Clear all classes (empty timetable)
  */
 export async function clearAllClassesFromStore(): Promise<boolean> {
+  markScheduleCustomized();
   const current = getLocalClasses() || [];
   current.forEach((c) => addDeletedClassId(c.id));
   setLocalClasses([]);
@@ -302,23 +270,13 @@ export async function clearAllClassesFromStore(): Promise<boolean> {
  * Reset classes to default schedule (Only if explicitly clicked by admin)
  */
 export async function resetAllClasses(): Promise<JEEClass[]> {
+  markScheduleCustomized();
   try {
-    const res = await fetch('/api/classes/reset', { method: 'POST' });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.classes)) {
-        // Clear tombstones for default IDs
-        data.classes.forEach((c: JEEClass) => clearDeletedClassId(c.id));
-        setLocalClasses(data.classes);
-        return data.classes;
-      }
-    }
+    await fetch('/api/classes/reset', { method: 'POST' });
   } catch (err) {}
 
-  const defaults = generateDefaultClasses();
-  defaults.forEach((c) => clearDeletedClassId(c.id));
-  setLocalClasses(defaults);
-  return defaults;
+  setLocalClasses([]);
+  return [];
 }
 
 const ATTENDANCE_KEY = 'inspiro_class_attendance_v1';
