@@ -1,248 +1,305 @@
 import type { JEEClass, PushSubscriptionData } from '../types/class.ts';
 import fs from 'fs';
 import path from 'path';
+import { createClient } from '@supabase/supabase-js';
 
-// Default seeded classes
+// Default seeded classes - empty by default so user has absolute control over timetable
 function generateInitialClasses(): JEEClass[] {
-  const now = Date.now();
-
-  return [
-    {
-      id: 'class-physics-rotational',
-      title: 'Rotational Motion: Moment of Inertia & Pure Rolling',
-      subject: 'Physics',
-      faculty: 'Er. R. Sharma (Ex-IIT Delhi)',
-      topic: 'Mechanics (JEE Advanced Level)',
-      description: 'Rigid body dynamics, theorem of parallel & perpendicular axes, and instantaneous center of rotation with previous year question breakdowns.',
-      youtube_url: 'https://www.youtube.com/watch?v=x0_z2_t6a_w',
-      youtube_id: 'x0_z2_t6a_w',
-      start_at: new Date(now - 15 * 60 * 1000).toISOString(),
-      duration_min: 90,
-      is_embeddable: true,
-      thumbnail_url: '/images/jee_physics_thumb_1791042406423.jpg',
-      created_at: new Date(now - 86400000).toISOString(),
-    },
-    {
-      id: 'class-math-calculus',
-      title: 'Definite Integration & Area Under Curves (PYQs)',
-      subject: 'Mathematics',
-      faculty: 'Prof. A. N. Murthy (IIT Madras Alumni)',
-      topic: 'Integral Calculus (JEE Main + Adv)',
-      description: 'Properties of definite integrals, Leibniz rule of differentiation, and graphical symmetry methods for high-speed problem solving.',
-      youtube_url: 'https://www.youtube.com/watch?v=3fumBcKC6RE',
-      youtube_id: '3fumBcKC6RE',
-      start_at: new Date(now + 20 * 60 * 1000).toISOString(),
-      duration_min: 75,
-      is_embeddable: true,
-      thumbnail_url: '/images/jee_math_thumb_1791042443540.jpg',
-      created_at: new Date(now - 43200000).toISOString(),
-    },
-    {
-      id: 'class-chem-coordination',
-      title: 'Coordination Chemistry & Crystal Field Theory',
-      subject: 'Chemistry',
-      faculty: 'Dr. Neha Agarwal (Ph.D. Chemistry)',
-      topic: 'Inorganic Chemistry',
-      description: 'Spectrochemical series, isomerism in coordination complexes, high spin vs low spin splitting and magnetic moment calculations.',
-      youtube_url: 'https://www.youtube.com/watch?v=kJQP7kiw5Fk',
-      youtube_id: 'kJQP7kiw5Fk',
-      start_at: new Date(now + 18 * 60 * 60 * 1000).toISOString(),
-      duration_min: 60,
-      is_embeddable: true,
-      thumbnail_url: '/images/jee_chemistry_thumb_1791042430591.jpg',
-      created_at: new Date(now - 20000000).toISOString(),
-    },
-    {
-      id: 'class-physics-electrostatics',
-      title: 'Electrostatics & Gauss Law: Advanced Applications',
-      subject: 'Physics',
-      faculty: 'Er. R. Sharma (Ex-IIT Delhi)',
-      topic: 'Electromagnetism',
-      description: 'Electric flux calculation through closed surfaces, conducting shells, self-energy of charge distribution, and electrostatic shielding.',
-      youtube_url: 'https://www.youtube.com/watch?v=hB9pZ3v9sW8',
-      youtube_id: 'hB9pZ3v9sW8',
-      start_at: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
-      duration_min: 90,
-      is_embeddable: true,
-      thumbnail_url: '/images/jee_classroom_hero_1791042392139.jpg',
-      created_at: new Date(now - 172800000).toISOString(),
-    },
-  ];
+  return [];
 }
 
-// Resilient writable data directory selector (handles read-only filesystems on Vercel / Cloud Run / Lambda)
-function resolveDataDirectory(): { readDir: string; writeDir: string } {
-  const localDir = path.resolve(process.cwd(), 'data');
-  let writeDir = localDir;
+// -------------------------------------------------------------
+// Cloud Persistence via Supabase (PostgreSQL)
+// -------------------------------------------------------------
+function getSupabaseClient() {
+  let rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    '';
 
-  try {
-    if (!fs.existsSync(localDir)) {
-      fs.mkdirSync(localDir, { recursive: true });
-    }
-    const testFile = path.join(localDir, '.write-test');
-    fs.writeFileSync(testFile, 'ok');
-    fs.unlinkSync(testFile);
-  } catch (err) {
-    // If local directory is read-only (e.g. Vercel deployment), fallback to /tmp
-    const tmpDir = path.resolve('/tmp', 'jee-data');
-    try {
-      if (!fs.existsSync(tmpDir)) {
-        fs.mkdirSync(tmpDir, { recursive: true });
-      }
-      writeDir = tmpDir;
-    } catch {
-      writeDir = localDir;
+  if (!rawUrl || !key) return null;
+
+  // Auto-normalize if user pasted postgresql:// connection string instead of https://
+  if (rawUrl.startsWith('postgresql://') || rawUrl.startsWith('postgres://')) {
+    const match = rawUrl.match(/postgres\.([a-z0-9]+):/i);
+    if (match && match[1]) {
+      rawUrl = `https://${match[1]}.supabase.co`;
     }
   }
 
-  return { readDir: localDir, writeDir };
+  try {
+    return createClient(rawUrl, key, {
+      auth: { persistSession: false },
+    });
+  } catch (err) {
+    console.warn('Failed to initialize Supabase client:', err);
+    return null;
+  }
 }
 
-const { readDir, writeDir } = resolveDataDirectory();
-const CLASSES_FILE_WRITE = path.join(writeDir, 'classes.json');
-const CLASSES_FILE_READ = path.join(readDir, 'classes.json');
+const supabase = getSupabaseClient();
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+const CLASSES_FILE = path.join(DATA_DIR, 'classes.json');
 
 function loadPersistedClasses(): JEEClass[] {
-  // Try write location first (has latest writes)
   try {
-    if (fs.existsSync(CLASSES_FILE_WRITE)) {
-      const raw = fs.readFileSync(CLASSES_FILE_WRITE, 'utf8');
+    if (fs.existsSync(CLASSES_FILE)) {
+      const raw = fs.readFileSync(CLASSES_FILE, 'utf8');
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
-  } catch (e) {
-    // Continue to read location
-  }
-
-  // Fallback to repo's committed data location
-  try {
-    if (CLASSES_FILE_WRITE !== CLASSES_FILE_READ && fs.existsSync(CLASSES_FILE_READ)) {
-      const raw = fs.readFileSync(CLASSES_FILE_READ, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch (e) {
-    console.warn('Failed to read classes.json:', e);
-  }
-
-  return generateInitialClasses();
+  } catch (e) {}
+  return [];
 }
 
-function persistClasses() {
-  try {
-    if (!fs.existsSync(writeDir)) {
-      fs.mkdirSync(writeDir, { recursive: true });
-    }
-    fs.writeFileSync(CLASSES_FILE_WRITE, JSON.stringify(classesStore, null, 2), 'utf8');
-  } catch (e) {
-    console.warn('Persist classes warning (in-memory preserved):', e);
-  }
-}
-
-// In-memory data store
 let classesStore: JEEClass[] = loadPersistedClasses();
 let subscriptionsStore: PushSubscriptionData[] = [];
 
 export async function getAllClasses(): Promise<JEEClass[]> {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('classes')
+        .select('*')
+        .order('start_at', { ascending: true });
+
+      if (!error && Array.isArray(data)) {
+        classesStore = data.map((row: any) => ({
+          id: String(row.id),
+          title: row.title,
+          subject: row.subject,
+          faculty: row.faculty || 'Faculty',
+          topic: row.topic || '',
+          description: row.description || '',
+          youtube_url: row.youtube_url,
+          youtube_id: row.youtube_id,
+          start_at: row.start_at,
+          duration_min: Number(row.duration_min),
+          is_embeddable: row.is_embeddable !== false,
+          thumbnail_url: row.thumbnail_url || (row.youtube_id ? `https://img.youtube.com/vi/${row.youtube_id}/hqdefault.jpg` : ''),
+          created_at: row.created_at || new Date().toISOString(),
+        }));
+        return classesStore;
+      }
+    } catch (sbErr) {
+      console.warn('Supabase fetch classes error:', sbErr);
+    }
+  }
+
   return [...classesStore].sort(
     (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
   );
 }
 
 export async function getClassById(id: string): Promise<JEEClass | null> {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('classes').select('*').eq('id', id).single();
+      if (!error && data) {
+        return {
+          id: String(data.id),
+          title: data.title,
+          subject: data.subject,
+          faculty: data.faculty || 'Faculty',
+          topic: data.topic || '',
+          description: data.description || '',
+          youtube_url: data.youtube_url,
+          youtube_id: data.youtube_id,
+          start_at: data.start_at,
+          duration_min: Number(data.duration_min),
+          is_embeddable: data.is_embeddable !== false,
+          thumbnail_url: data.thumbnail_url || `https://img.youtube.com/vi/${data.youtube_id}/hqdefault.jpg`,
+          created_at: data.created_at,
+        };
+      }
+    } catch (e) {}
+  }
+
   const found = classesStore.find((c) => c.id === id);
   return found || null;
 }
 
-export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'>): Promise<JEEClass> {
+export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { id?: string }): Promise<JEEClass> {
+  const localId = data.id || `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const created_at = new Date().toISOString();
+
+  if (supabase) {
+    try {
+      const insertPayload: any = {
+        title: data.title,
+        subject: data.subject,
+        faculty: data.faculty || 'Faculty',
+        topic: data.topic || '',
+        description: data.description || '',
+        youtube_url: data.youtube_url,
+        youtube_id: data.youtube_id,
+        start_at: data.start_at,
+        duration_min: Number(data.duration_min),
+        is_embeddable: data.is_embeddable !== false,
+      };
+
+      if (data.id && UUID_REGEX.test(data.id)) {
+        insertPayload.id = data.id;
+      }
+
+      const { data: inserted, error } = await supabase
+        .from('classes')
+        .insert(insertPayload)
+        .select()
+        .single();
+
+      if (!error && inserted) {
+        const savedClass: JEEClass = {
+          ...data,
+          id: String(inserted.id),
+          created_at: inserted.created_at || created_at,
+        };
+        classesStore.push(savedClass);
+        return savedClass;
+      }
+    } catch (sbErr) {
+      console.warn('Supabase createClass warning:', sbErr);
+    }
+  }
+
   const newClass: JEEClass = {
     ...data,
-    id: `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-    created_at: new Date().toISOString(),
+    id: localId,
+    created_at,
   };
   classesStore.push(newClass);
-  persistClasses();
   return newClass;
 }
 
 export async function updateClass(id: string, updates: Partial<JEEClass>): Promise<JEEClass | null> {
+  if (supabase) {
+    try {
+      const updatePayload: any = {};
+      if (updates.title) updatePayload.title = updates.title;
+      if (updates.subject) updatePayload.subject = updates.subject;
+      if (updates.faculty) updatePayload.faculty = updates.faculty;
+      if (updates.topic !== undefined) updatePayload.topic = updates.topic;
+      if (updates.description !== undefined) updatePayload.description = updates.description;
+      if (updates.youtube_url) updatePayload.youtube_url = updates.youtube_url;
+      if (updates.youtube_id) updatePayload.youtube_id = updates.youtube_id;
+      if (updates.start_at) updatePayload.start_at = updates.start_at;
+      if (updates.duration_min) updatePayload.duration_min = Number(updates.duration_min);
+      if (updates.is_embeddable !== undefined) updatePayload.is_embeddable = updates.is_embeddable;
+
+      await supabase.from('classes').update(updatePayload).eq('id', id);
+    } catch (e) {}
+  }
+
   const index = classesStore.findIndex((c) => c.id === id);
   if (index === -1) return null;
-  classesStore[index] = {
-    ...classesStore[index],
-    ...updates,
-  };
-  persistClasses();
+  classesStore[index] = { ...classesStore[index], ...updates };
   return classesStore[index];
 }
 
 export async function deleteClass(id: string): Promise<boolean> {
-  const initialLength = classesStore.length;
-  classesStore = classesStore.filter((c) => c.id !== id);
-  const deleted = classesStore.length < initialLength;
-  if (deleted) {
-    persistClasses();
+  if (supabase) {
+    try {
+      await supabase.from('classes').delete().eq('id', id);
+    } catch (e) {}
   }
-  return deleted;
+
+  classesStore = classesStore.filter((c) => c.id !== id);
+  return true;
 }
 
 export async function clearAllClasses(): Promise<void> {
+  if (supabase) {
+    try {
+      await supabase.from('classes').delete().neq('duration_min', -999);
+    } catch (e) {}
+  }
+
   classesStore = [];
-  persistClasses();
 }
 
 export async function resetClasses(): Promise<JEEClass[]> {
-  classesStore = generateInitialClasses();
-  persistClasses();
-  return getAllClasses();
+  await clearAllClasses();
+  return [];
 }
 
-// Bidirectional synchronization from client to server (reconciles scheduled classes)
 export async function syncClasses(clientClasses: JEEClass[]): Promise<JEEClass[]> {
   if (!Array.isArray(clientClasses)) return getAllClasses();
 
-  const classMap = new Map<string, JEEClass>();
-  // 1. Put current server classes
-  classesStore.forEach((c) => {
-    if (c && c.id) classMap.set(c.id, c);
-  });
-
-  // 2. Merge client classes (preserves all user-scheduled classes across months)
-  clientClasses.forEach((clientClass) => {
-    if (!clientClass || !clientClass.id) return;
-    const existing = classMap.get(clientClass.id);
-    if (!existing) {
-      classMap.set(clientClass.id, clientClass);
-    } else {
-      const clientTime = new Date(clientClass.created_at || 0).getTime();
-      const serverTime = new Date(existing.created_at || 0).getTime();
-      if (clientTime >= serverTime) {
-        classMap.set(clientClass.id, { ...existing, ...clientClass });
+  if (supabase && clientClasses.length > 0) {
+    try {
+      for (const cls of clientClasses) {
+        if (!cls.title || !cls.youtube_url || !cls.start_at) continue;
+        const row: any = {
+          title: cls.title,
+          subject: cls.subject,
+          faculty: cls.faculty || 'Faculty',
+          topic: cls.topic || '',
+          description: cls.description || '',
+          youtube_url: cls.youtube_url,
+          youtube_id: cls.youtube_id,
+          start_at: cls.start_at,
+          duration_min: Number(cls.duration_min),
+          is_embeddable: cls.is_embeddable !== false,
+        };
+        if (cls.id && UUID_REGEX.test(cls.id)) {
+          row.id = cls.id;
+          await supabase.from('classes').upsert(row);
+        } else {
+          const { data: existing } = await supabase
+            .from('classes')
+            .select('id')
+            .eq('start_at', cls.start_at)
+            .limit(1);
+          if (!existing || existing.length === 0) {
+            await supabase.from('classes').insert(row);
+          }
+        }
       }
+      return await getAllClasses();
+    } catch (e) {
+      console.warn('Supabase syncClasses warning:', e);
     }
-  });
+  }
 
-  classesStore = Array.from(classMap.values());
-  persistClasses();
   return getAllClasses();
 }
 
 export async function savePushSubscription(sub: PushSubscriptionData): Promise<void> {
-  const exists = subscriptionsStore.some((s) => s.endpoint === sub.endpoint);
-  if (!exists) {
-    subscriptionsStore.push(sub);
+  if (supabase) {
+    try {
+      await supabase.from('push_subscriptions').upsert({
+        endpoint: sub.endpoint,
+        p256dh: sub.keys.p256dh,
+        auth: sub.keys.auth,
+        user_agent: sub.userAgent || '',
+      });
+    } catch (e) {}
   }
 }
 
 export async function getPushSubscriptions(): Promise<PushSubscriptionData[]> {
-  return [...subscriptionsStore];
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('push_subscriptions').select('*');
+      if (!error && Array.isArray(data)) {
+        return data.map((r: any) => ({
+          endpoint: r.endpoint,
+          keys: {
+            p256dh: r.p256dh,
+            auth: r.auth,
+          },
+          userAgent: r.user_agent,
+        }));
+      }
+    } catch (e) {}
+  }
+  return [];
 }
-
-// -------------------------------------------------------------
-// Long-Term Persistence: Key Moment Bookmarks
-// -------------------------------------------------------------
-const BOOKMARKS_FILE_WRITE = path.join(writeDir, 'bookmarks.json');
-const BOOKMARKS_FILE_READ = path.join(readDir, 'bookmarks.json');
 
 export interface ServerBookmark {
   id: string;
@@ -254,34 +311,7 @@ export interface ServerBookmark {
   createdAt: string;
 }
 
-function loadPersistedBookmarks(): ServerBookmark[] {
-  try {
-    if (fs.existsSync(BOOKMARKS_FILE_WRITE)) {
-      const raw = fs.readFileSync(BOOKMARKS_FILE_WRITE, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-    if (BOOKMARKS_FILE_WRITE !== BOOKMARKS_FILE_READ && fs.existsSync(BOOKMARKS_FILE_READ)) {
-      const raw = fs.readFileSync(BOOKMARKS_FILE_READ, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (e) {
-    console.warn('Failed to read bookmarks.json:', e);
-  }
-  return [];
-}
-
-let bookmarksStore: ServerBookmark[] = loadPersistedBookmarks();
-
-function persistBookmarks() {
-  try {
-    if (!fs.existsSync(writeDir)) fs.mkdirSync(writeDir, { recursive: true });
-    fs.writeFileSync(BOOKMARKS_FILE_WRITE, JSON.stringify(bookmarksStore, null, 2), 'utf8');
-  } catch (e) {
-    console.warn('Persist bookmarks warning:', e);
-  }
-}
+let bookmarksStore: ServerBookmark[] = [];
 
 export async function getAllServerBookmarks(): Promise<ServerBookmark[]> {
   return [...bookmarksStore];
@@ -294,25 +324,13 @@ export async function addServerBookmark(bm: ServerBookmark): Promise<ServerBookm
   } else {
     bookmarksStore.push(bm);
   }
-  persistBookmarks();
   return bm;
 }
 
 export async function deleteServerBookmark(id: string): Promise<boolean> {
-  const initial = bookmarksStore.length;
   bookmarksStore = bookmarksStore.filter((b) => b.id !== id);
-  if (bookmarksStore.length < initial) {
-    persistBookmarks();
-    return true;
-  }
-  return false;
+  return true;
 }
-
-// -------------------------------------------------------------
-// Long-Term Persistence: Study Records & Real-Time Hours
-// -------------------------------------------------------------
-const STUDY_HOURS_FILE_WRITE = path.join(writeDir, 'studyHours.json');
-const STUDY_HOURS_FILE_READ = path.join(readDir, 'studyHours.json');
 
 export interface ServerStudyRecord {
   id: string;
@@ -323,34 +341,7 @@ export interface ServerStudyRecord {
   classTitle?: string;
 }
 
-function loadPersistedStudyRecords(): ServerStudyRecord[] {
-  try {
-    if (fs.existsSync(STUDY_HOURS_FILE_WRITE)) {
-      const raw = fs.readFileSync(STUDY_HOURS_FILE_WRITE, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-    if (STUDY_HOURS_FILE_WRITE !== STUDY_HOURS_FILE_READ && fs.existsSync(STUDY_HOURS_FILE_READ)) {
-      const raw = fs.readFileSync(STUDY_HOURS_FILE_READ, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (e) {
-    console.warn('Failed to read studyHours.json:', e);
-  }
-  return [];
-}
-
-let studyRecordsStore: ServerStudyRecord[] = loadPersistedStudyRecords();
-
-function persistStudyRecords() {
-  try {
-    if (!fs.existsSync(writeDir)) fs.mkdirSync(writeDir, { recursive: true });
-    fs.writeFileSync(STUDY_HOURS_FILE_WRITE, JSON.stringify(studyRecordsStore, null, 2), 'utf8');
-  } catch (e) {
-    console.warn('Persist studyHours warning:', e);
-  }
-}
+let studyRecordsStore: ServerStudyRecord[] = [];
 
 export async function getAllServerStudyRecords(): Promise<ServerStudyRecord[]> {
   return [...studyRecordsStore];
@@ -358,14 +349,7 @@ export async function getAllServerStudyRecords(): Promise<ServerStudyRecord[]> {
 
 export async function saveServerStudyRecords(records: ServerStudyRecord[]): Promise<void> {
   studyRecordsStore = records;
-  persistStudyRecords();
 }
-
-// -------------------------------------------------------------
-// Long-Term Persistence: Class Attendance
-// -------------------------------------------------------------
-const ATTENDANCE_FILE_WRITE = path.join(writeDir, 'attendance.json');
-const ATTENDANCE_FILE_READ = path.join(readDir, 'attendance.json');
 
 export interface ServerAttendanceRecord {
   classId: string;
@@ -375,34 +359,7 @@ export interface ServerAttendanceRecord {
   lastWatchedAt: string;
 }
 
-function loadPersistedAttendance(): Record<string, ServerAttendanceRecord> {
-  try {
-    if (fs.existsSync(ATTENDANCE_FILE_WRITE)) {
-      const raw = fs.readFileSync(ATTENDANCE_FILE_WRITE, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') return parsed;
-    }
-    if (ATTENDANCE_FILE_WRITE !== ATTENDANCE_FILE_READ && fs.existsSync(ATTENDANCE_FILE_READ)) {
-      const raw = fs.readFileSync(ATTENDANCE_FILE_READ, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') return parsed;
-    }
-  } catch (e) {
-    console.warn('Failed to read attendance.json:', e);
-  }
-  return {};
-}
-
-let attendanceStore: Record<string, ServerAttendanceRecord> = loadPersistedAttendance();
-
-function persistAttendance() {
-  try {
-    if (!fs.existsSync(writeDir)) fs.mkdirSync(writeDir, { recursive: true });
-    fs.writeFileSync(ATTENDANCE_FILE_WRITE, JSON.stringify(attendanceStore, null, 2), 'utf8');
-  } catch (e) {
-    console.warn('Persist attendance warning:', e);
-  }
-}
+let attendanceStore: Record<string, ServerAttendanceRecord> = {};
 
 export async function getServerAttendance(): Promise<Record<string, ServerAttendanceRecord>> {
   return { ...attendanceStore };
@@ -410,5 +367,4 @@ export async function getServerAttendance(): Promise<Record<string, ServerAttend
 
 export async function saveServerAttendance(map: Record<string, ServerAttendanceRecord>): Promise<void> {
   attendanceStore = { ...attendanceStore, ...map };
-  persistAttendance();
-}
+        }
