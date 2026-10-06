@@ -31,6 +31,40 @@ let subscriptionsStore: PushSubscriptionData[] = [];
 // =====================================================
 // CLASSES - Now using Supabase with file fallback
 // =====================================================
+export async function getAllClasses(): Promise<JEEClass[]> {
+  if (!supabase) return [];
+  const { data } = await supabase.from('classes').select('*').order('start_at', { ascending: true });
+  return (data as JEEClass[]) || [];
+}
+export async function getClassById(id: string): Promise<JEEClass | null> {
+  if (!supabase) return null;
+  const { data } = await supabase.from('classes').select('*').eq('id', id).single();
+  return data as JEEClass | null;
+}
+export async function createClass(d: Omit<JEEClass, 'id' | 'created_at'>): Promise<JEEClass> {
+  if (!supabase) throw new Error('Supabase not configured');
+  const { data, error } = await supabase.from('classes').insert([d]).select().single();
+  if (error) throw new Error(error.message);
+  return data as JEEClass;
+}
+export async function updateClass(id: string, u: Partial<JEEClass>): Promise<JEEClass | null> {
+  if (!supabase) return null;
+  const { data } = await supabase.from('classes').update(u).eq('id', id).select().single();
+  return data as JEEClass;
+}
+export async function deleteClass(id: string): Promise<boolean> {
+  if (!supabase) return false;
+  const { error } = await supabase.from('classes').delete().eq('id', id);
+  return!error;
+}
+export async function clearAllClasses(): Promise<void> {
+  if (!supabase) return;
+  await supabase.from('classes').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+}
+export async function resetClasses(): Promise<JEEClass[]> {
+  await clearAllClasses();
+  return getAllClasses();
+}
 
 
 export async function savePushSubscription(sub: PushSubscriptionData): Promise<void> {
