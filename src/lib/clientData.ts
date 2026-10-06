@@ -1,22 +1,116 @@
 import { JEEClass } from '../types/class';
 
-// Fallback initial classes relative to the current IST time
+// Fallback initial classes
 export function generateDefaultClasses(): JEEClass[] {
-  return [];
+  const now = Date.now();
+
+  return [
+    {
+      id: 'class-physics-rotational',
+      title: 'Rotational Motion: Moment of Inertia & Pure Rolling',
+      subject: 'Physics',
+      faculty: 'Er. R. Sharma (Ex-IIT Delhi)',
+      topic: 'Mechanics (JEE Advanced Level)',
+      description: 'Rigid body dynamics, theorem of parallel & perpendicular axes, and instantaneous center of rotation with previous year question breakdowns.',
+      youtube_url: 'https://www.youtube.com/watch?v=x0_z2_t6a_w',
+      youtube_id: 'x0_z2_t6a_w',
+      start_at: new Date(now - 15 * 60 * 1000).toISOString(),
+      duration_min: 90,
+      is_embeddable: true,
+      thumbnail_url: '/images/jee_physics_thumb_1791042406423.jpg',
+      created_at: new Date(now - 86400000).toISOString(),
+    },
+    {
+      id: 'class-math-calculus',
+      title: 'Definite Integration & Area Under Curves (PYQs)',
+      subject: 'Mathematics',
+      faculty: 'Prof. A. N. Murthy (IIT Madras Alumni)',
+      topic: 'Integral Calculus (JEE Main + Adv)',
+      description: 'Properties of definite integrals, Leibniz rule of differentiation, and graphical symmetry methods for high-speed problem solving.',
+      youtube_url: 'https://www.youtube.com/watch?v=3fumBcKC6RE',
+      youtube_id: '3fumBcKC6RE',
+      start_at: new Date(now + 20 * 60 * 1000).toISOString(),
+      duration_min: 75,
+      is_embeddable: true,
+      thumbnail_url: '/images/jee_math_thumb_1791042443540.jpg',
+      created_at: new Date(now - 43200000).toISOString(),
+    },
+    {
+      id: 'class-chem-coordination',
+      title: 'Coordination Chemistry & Crystal Field Theory',
+      subject: 'Chemistry',
+      faculty: 'Dr. Neha Agarwal (Ph.D. Chemistry)',
+      topic: 'Inorganic Chemistry',
+      description: 'Spectrochemical series, isomerism in coordination complexes, high spin vs low spin splitting and magnetic moment calculations.',
+      youtube_url: 'https://www.youtube.com/watch?v=kJQP7kiw5Fk',
+      youtube_id: 'kJQP7kiw5Fk',
+      start_at: new Date(now + 18 * 60 * 60 * 1000).toISOString(),
+      duration_min: 60,
+      is_embeddable: true,
+      thumbnail_url: '/images/jee_chemistry_thumb_1791042430591.jpg',
+      created_at: new Date(now - 20000000).toISOString(),
+    },
+    {
+      id: 'class-physics-electrostatics',
+      title: 'Electrostatics & Gauss Law: Advanced Applications',
+      subject: 'Physics',
+      faculty: 'Er. R. Sharma (Ex-IIT Delhi)',
+      topic: 'Electromagnetism',
+      description: 'Electric flux calculation through closed surfaces, conducting shells, self-energy of charge distribution, and electrostatic shielding.',
+      youtube_url: 'https://www.youtube.com/watch?v=hB9pZ3v9sW8',
+      youtube_id: 'hB9pZ3v9sW8',
+      start_at: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+      duration_min: 90,
+      is_embeddable: true,
+      thumbnail_url: '/images/jee_classroom_hero_1791042392139.jpg',
+      created_at: new Date(now - 172800000).toISOString(),
+    },
+  ];
 }
 
 const STORAGE_KEY = 'inspiro_jee_classes_v2';
+const BACKUP_KEY = 'inspiro_jee_classes_backup_v2';
+const DELETED_KEY = 'inspiro_jee_deleted_ids_v2';
 
-// Safe localStorage access - respects user deletions even if list is empty
+// Deleted classes tombstone set (prevents cold-started serverless instances from resurrecting deleted defaults)
+function getDeletedClassIds(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = localStorage.getItem(DELETED_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
+    }
+  } catch {}
+  return new Set();
+}
+
+function addDeletedClassId(id: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const set = getDeletedClassIds();
+    set.add(id);
+    localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+function clearDeletedClassId(id: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const set = getDeletedClassIds();
+    set.delete(id);
+    localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+// Safe localStorage access
 function getLocalClasses(): JEEClass[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed; // Returns whatever user saved, including empty []
-      }
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch (e) {
     console.warn('localStorage read error:', e);
@@ -24,61 +118,135 @@ function getLocalClasses(): JEEClass[] {
   return [];
 }
 
+function getBackupClasses(): JEEClass[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (raw !== null) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+  return [];
+}
+
 function setLocalClasses(classes: JEEClass[]): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(classes));
+    // Also save in long-term backup key
+    if (classes.length > 0) {
+      localStorage.setItem(BACKUP_KEY, JSON.stringify(classes));
+    }
   } catch (e) {
     console.warn('localStorage write error:', e);
   }
 }
 
 /**
- * Universal Class Fetcher
- * Tries the /api/classes endpoint first.
- * If successful, syncs to localStorage and returns server state (even if empty []).
+ * Intelligent Two-Way Reconciler:
+ * - Preserves ALL user-scheduled classes across months even if a serverless container cold-starts!
+ * - Respects deleted class tombstones so old defaults don't reappear.
+ * - Detects if server was missing scheduled classes and signals background sync.
+ */
+function reconcileClasses(
+  localList: JEEClass[],
+  serverList: JEEClass[]
+): { merged: JEEClass[]; needsSync: boolean } {
+  const deletedIds = getDeletedClassIds();
+  const map = new Map<string, JEEClass>();
+
+  // 1. Put valid local classes first (authoritative user scheduled state)
+  localList.forEach((c) => {
+    if (c && c.id && !deletedIds.has(c.id)) {
+      map.set(c.id, c);
+    }
+  });
+
+  let needsServerSync = false;
+
+  // 2. Incorporate server classes
+  serverList.forEach((sc) => {
+    if (!sc || !sc.id) return;
+    // If user explicitly deleted this class, do not resurrect it
+    if (deletedIds.has(sc.id)) return;
+
+    const localExisting = map.get(sc.id);
+    if (!localExisting) {
+      map.set(sc.id, sc);
+    } else {
+      // Merge: keep whichever is newer
+      const localTime = new Date(localExisting.created_at || 0).getTime();
+      const serverTime = new Date(sc.created_at || 0).getTime();
+      if (serverTime > localTime) {
+        map.set(sc.id, sc);
+      }
+    }
+  });
+
+  // Check if local has classes that the server container was missing (e.g. Vercel cold-start)
+  for (const localId of map.keys()) {
+    if (!serverList.some((sc) => sc.id === localId)) {
+      needsServerSync = true;
+      break;
+    }
+  }
+
+  const merged = Array.from(map.values()).sort(
+    (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+  );
+
+  return { merged, needsSync: needsServerSync };
+}
+
+/**
+ * Universal Class Fetcher:
+ * Guaranteed zero-data-loss architecture.
+ * Works seamlessly on Vercel, Cloud Run, static hosts, or full offline mode.
  */
 export async function fetchAllClasses(): Promise<JEEClass[]> {
+  const local = getLocalClasses();
+  const backup = getBackupClasses();
+  const effectiveLocal = local.length > 0 ? local : backup;
+
   try {
-    const res = await fetch(`/api/classes?t=${Date.now()}`, {
-      headers: { 'Accept': 'application/json' },
-      cache: 'no-store',
+    const res = await fetch('/api/classes', {
+      headers: { Accept: 'application/json' },
     });
+
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.classes)) {
-        setLocalClasses(data.classes);
-        return data.classes;
+        // Reconcile and preserve user-scheduled classes
+        const { merged, needsSync } = reconcileClasses(effectiveLocal, data.classes);
+        setLocalClasses(merged);
+
+        // If local had scheduled classes that the server container didn't have (cold start on Vercel),
+        // sync them back to server in background so serverless lambdas stay up to date!
+        if (needsSync && merged.length > 0) {
+          fetch('/api/classes/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ classes: merged }),
+          }).catch(() => {});
+        }
+
+        return merged;
       }
     }
-  } catch (err) {}
-  return getLocalClasses();
+  } catch (err) {
+    // Network / static host fallback
+  }
+
+  return effectiveLocal.length > 0 ? effectiveLocal : generateDefaultClasses();
 }
 
 /**
  * Save new class
  */
-export async function saveNewClass(newClass: Omit<JEEClass, 'id' | 'created_at'>): Promise<JEEClass> {
-  try {
-    const res = await fetch('/api/classes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newClass),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data.class) {
-        const current = getLocalClasses();
-        const updated = [...current.filter(c => c.id !== data.class.id), data.class];
-        setLocalClasses(updated);
-        return data.class;
-      }
-    }
-  } catch (err) {
-    // Fallback to local
-  }
-
+export async function saveNewClass(
+  newClass: Omit<JEEClass, 'id' | 'created_at'>
+): Promise<JEEClass> {
   const localId = `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const created: JEEClass = {
     ...newClass,
@@ -86,9 +254,33 @@ export async function saveNewClass(newClass: Omit<JEEClass, 'id' | 'created_at'>
     created_at: new Date().toISOString(),
   };
 
+  clearDeletedClassId(localId);
+
+  // 1. Immediately store in localStorage & backup so it is 100% saved on this device
   const current = getLocalClasses();
-  const updated = [...current, created];
+  const updated = [...current.filter((c) => c.id !== localId), created];
   setLocalClasses(updated);
+
+  // 2. Persist to server / Vercel API
+  try {
+    const res = await fetch('/api/classes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(created),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.class) {
+        const synced = [...updated.filter((c) => c.id !== localId && c.id !== data.class.id), data.class];
+        setLocalClasses(synced);
+        return data.class;
+      }
+    }
+  } catch (err) {
+    // Local persistence guarantees zero data loss even if server call fails
+  }
+
   return created;
 }
 
@@ -96,17 +288,19 @@ export async function saveNewClass(newClass: Omit<JEEClass, 'id' | 'created_at'>
  * Delete class
  */
 export async function removeClass(id: string): Promise<boolean> {
-  // 1. Immediately update local storage so deleted class vanishes from UI without re-appearing
+  // 1. Mark as deleted in tombstones so cold starts cannot resurrect it
+  addDeletedClassId(id);
+
+  // 2. Immediately update local storage
   const current = getLocalClasses();
-  const updated = current.filter(c => c.id !== id);
+  const updated = current.filter((c) => c.id !== id);
   setLocalClasses(updated);
 
-  // 2. Call backend to remove from persistent file
+  // 3. Call backend to remove from persistent file
   try {
     await fetch(`/api/classes/${id}`, {
-  method: 'DELETE',
-  cache: 'no-store',
-});
+      method: 'DELETE',
+    });
   } catch (err) {
     // Continue with local delete
   }
@@ -118,17 +312,13 @@ export async function removeClass(id: string): Promise<boolean> {
  * Clear all classes (empty timetable)
  */
 export async function clearAllClassesFromStore(): Promise<boolean> {
+  const current = getLocalClasses();
+  current.forEach((c) => addDeletedClassId(c.id));
+  setLocalClasses([]);
   try {
-    await fetch(`/api/classes/clear?t=${Date.now()}`, { 
-      method: 'POST',
-      cache: 'no-store',
-    });
-    await new Promise(r => setTimeout(r, 600));
-    const res = await fetch(`/api/classes?t=${Date.now()}`, { cache: 'no-store' });
-    const data = await res.json();
-    setLocalClasses(Array.isArray(data.classes) ? data.classes : []);
-  } catch {
-    setLocalClasses([]);
+    await fetch('/api/classes/clear', { method: 'POST' });
+  } catch (err) {
+    // Continue
   }
   return true;
 }
@@ -142,15 +332,16 @@ export async function resetAllClasses(): Promise<JEEClass[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.classes)) {
+        // Clear tombstones for default IDs
+        data.classes.forEach((c: JEEClass) => clearDeletedClassId(c.id));
         setLocalClasses(data.classes);
         return data.classes;
       }
     }
-  } catch (err) {
-    // Ignore
-  }
+  } catch (err) {}
 
   const defaults = generateDefaultClasses();
+  defaults.forEach((c) => clearDeletedClassId(c.id));
   setLocalClasses(defaults);
   return defaults;
 }

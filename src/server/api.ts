@@ -19,6 +19,7 @@ import {
   saveServerStudyRecords,
   getServerAttendance,
   saveServerAttendance,
+  syncClasses,
 } from './db.ts';
 import { extractYouTubeId, verifyYouTubeEmbeddability } from '../lib/youtube.ts';
 import { checkScheduleOverlap } from '../lib/overlap.ts';
@@ -76,6 +77,17 @@ apiRouter.post('/classes/clear', async (req: Request, res: Response) => {
   try {
     await clearAllClasses();
     res.json({ success: true, classes: [] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2c. Bidirectional class schedule synchronization (protects multi-month scheduled classes)
+apiRouter.post('/classes/sync', async (req: Request, res: Response) => {
+  try {
+    const { classes: clientClasses } = req.body;
+    const synced = await syncClasses(clientClasses);
+    res.json({ success: true, classes: synced });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

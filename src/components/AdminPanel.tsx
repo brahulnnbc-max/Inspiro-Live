@@ -768,6 +768,32 @@ const handleClearAll = async () => {
                 onChange={(e) => setStartDate(e.target.value)}
                 className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-white focus:outline-none focus:border-sky-500 font-mono"
               />
+              {/* Quick multi-month scheduling jump helpers */}
+              <div className="flex items-center gap-1 flex-wrap pt-1">
+                <span className="text-[10px] text-slate-500 font-mono">Jump:</span>
+                {[
+                  { label: 'Today', days: 0 },
+                  { label: 'Tomorrow', days: 1 },
+                  { label: '+1 Wk', days: 7 },
+                  { label: '+1 Mo', days: 30 },
+                  { label: '+3 Mo', days: 90 },
+                  { label: '+6 Mo', days: 180 },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() + preset.days);
+                      const pad = (n: number) => n.toString().padStart(2, '0');
+                      setStartDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+                    }}
+                    className="px-1.5 py-0.5 text-[10px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 transition-colors"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Time (IST) */}
@@ -899,6 +925,31 @@ const handleClearAll = async () => {
                   onChange={(e) => setBulkStartDate(e.target.value)}
                   className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-white font-mono"
                 />
+                <div className="flex items-center gap-1 flex-wrap pt-1">
+                  <span className="text-[10px] text-slate-500 font-mono">Jump:</span>
+                  {[
+                    { label: 'Today', days: 0 },
+                    { label: 'Tomorrow', days: 1 },
+                    { label: '+1 Wk', days: 7 },
+                    { label: '+1 Mo', days: 30 },
+                    { label: '+3 Mo', days: 90 },
+                    { label: '+6 Mo', days: 180 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() + preset.days);
+                        const pad = (n: number) => n.toString().padStart(2, '0');
+                        setBulkStartDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+                      }}
+                      className="px-1.5 py-0.5 text-[10px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 transition-colors"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div>
