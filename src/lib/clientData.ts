@@ -5,6 +5,28 @@ export function generateDefaultClasses(): JEEClass[] {
   return [];
 }
 
+export const DUMMY_CLASS_IDS = new Set([
+  'class-physics-rotational',
+  'class-physics-electrostatics',
+  'class-math-calculus',
+  'class-chem-coordination',
+]);
+
+export function isDummyClass(cls: any): boolean {
+  if (!cls) return false;
+  if (cls.id && DUMMY_CLASS_IDS.has(cls.id)) return true;
+  const title = (cls.title || '').trim().toLowerCase();
+  if (
+    title.includes('rotational motion: moment of inertia') ||
+    title.includes('electrostatics & gauss law') ||
+    title.includes('definite integration & area under curves') ||
+    title.includes('coordination chemistry & crystal field')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 const STORAGE_KEY = 'inspiro_jee_classes_v2';
 const BACKUP_KEY = 'inspiro_jee_classes_backup_v2';
 const DELETED_KEY = 'inspiro_jee_deleted_ids_v2';
@@ -40,14 +62,21 @@ function clearDeletedClassId(id: string) {
   } catch {}
 }
 
-// Safe localStorage access
+// Safe localStorage access with automatic dummy-class purging
 function getLocalClasses(): JEEClass[] | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter((c) => !isDummyClass(c));
+        if (cleaned.length !== parsed.length) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+          localStorage.setItem(BACKUP_KEY, JSON.stringify(cleaned));
+        }
+        return cleaned;
+      }
     }
   } catch (e) {
     console.warn('localStorage read error:', e);
@@ -61,7 +90,9 @@ function getBackupClasses(): JEEClass[] {
     const raw = localStorage.getItem(BACKUP_KEY);
     if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((c) => !isDummyClass(c));
+      }
     }
   } catch (e) {}
   return [];
@@ -70,8 +101,9 @@ function getBackupClasses(): JEEClass[] {
 function setLocalClasses(classes: JEEClass[]): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(classes));
-    localStorage.setItem(BACKUP_KEY, JSON.stringify(classes));
+    const clean = classes.filter((c) => !isDummyClass(c));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
+    localStorage.setItem(BACKUP_KEY, JSON.stringify(clean));
   } catch (e) {
     console.warn('localStorage write error:', e);
   }
@@ -80,6 +112,7 @@ function setLocalClasses(classes: JEEClass[]): void {
 /**
  * Intelligent Two-Way Reconciler:
  * - Preserves ALL user-scheduled classes across months even if a serverless container cold-starts!
+ * - Strips any unwanted dummy/sample classes completely.
  * - Respects deleted class tombstones so old defaults don't reappear.
  * - Detects if server was missing scheduled classes and signals background sync.
  */
@@ -90,8 +123,11 @@ function reconcileClasses(
   const deletedIds = getDeletedClassIds();
   const map = new Map<string, JEEClass>();
 
+  const cleanLocal = localList.filter((c) => !isDummyClass(c));
+  const cleanServer = serverList.filter((c) => !isDummyClass(c));
+
   // 1. Put valid local classes first (authoritative user scheduled state)
-  localList.forEach((c) => {
+  cleanLocal.forEach((c) => {
     if (c && c.id && !deletedIds.has(c.id)) {
       map.set(c.id, c);
     }
@@ -100,9 +136,8 @@ function reconcileClasses(
   let needsServerSync = false;
 
   // 2. Incorporate server classes
-  serverList.forEach((sc) => {
+  cleanServer.forEach((sc) => {
     if (!sc || !sc.id) return;
-    // If user explicitly deleted this class, do not resurrect it
     if (deletedIds.has(sc.id)) return;
 
     const localExisting = map.get(sc.id);
@@ -112,7 +147,7 @@ function reconcileClasses(
       // Merge: keep whichever is newer
       const localTime = new Date(localExisting.created_at || 0).getTime();
       const serverTime = new Date(sc.created_at || 0).getTime();
-      if (serverTime > localTime) {
+      if (serverTime >= localTime) {
         map.set(sc.id, sc);
       }
     }
@@ -120,15 +155,15 @@ function reconcileClasses(
 
   // Check if local has classes that the server container was missing (e.g. Vercel cold-start)
   for (const localId of map.keys()) {
-    if (!serverList.some((sc) => sc.id === localId)) {
+    if (!cleanServer.some((sc) => sc.id === localId)) {
       needsServerSync = true;
       break;
     }
   }
 
-  const merged = Array.from(map.values()).sort(
-    (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
-  );
+  const merged = Array.from(map.values())
+    .filter((c) => !isDummyClass(c))
+    .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
 
   return { merged, needsSync: needsServerSync };
 }
@@ -167,7 +202,7 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
           fetch('/api/classes/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ classes: merged }),
+            body: JSON.stringify({ classes: merged.filter((c) => !isDummyClass(c)) }),
           }).catch(() => {});
         }
 

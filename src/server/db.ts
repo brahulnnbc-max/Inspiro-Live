@@ -1,10 +1,42 @@
 import type { JEEClass, PushSubscriptionData } from '../types/class.ts';
 import fs from 'fs';
 import path from 'path';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // Default seeded classes - empty by default so user has absolute control over timetable
-function generateInitialClasses(): JEEClass[] {
+export function generateInitialClasses(): JEEClass[] {
   return [];
+}
+
+export const DUMMY_IDS = new Set([
+  'class-physics-rotational',
+  'class-physics-electrostatics',
+  'class-math-calculus',
+  'class-chem-coordination',
+]);
+
+export function isDummyClass(cls: any): boolean {
+  if (!cls) return false;
+  if (cls.id && DUMMY_IDS.has(cls.id)) return true;
+  const title = (cls.title || '').trim().toLowerCase();
+  if (
+    title.includes('rotational motion: moment of inertia') ||
+    title.includes('electrostatics & gauss law') ||
+    title.includes('definite integration & area under curves') ||
+    title.includes('coordination chemistry & crystal field')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function normalizeSubject(subject: string): 'Physics' | 'Chemistry' | 'Mathematics' {
+  const s = (subject || '').trim().toLowerCase();
+  if (s.includes('chem')) return 'Chemistry';
+  if (s.includes('math')) return 'Mathematics';
+  return 'Physics';
 }
 
 // -------------------------------------------------------------
@@ -47,34 +79,71 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const CLASSES_FILE = path.join(DATA_DIR, 'classes.json');
 
+if (!fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {}
+}
+
 function loadPersistedClasses(): JEEClass[] {
   try {
     if (fs.existsSync(CLASSES_FILE)) {
       const raw = fs.readFileSync(CLASSES_FILE, 'utf8');
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((c) => !isDummyClass(c));
+      }
     }
   } catch (e) {}
   return [];
+}
+
+function persistClasses(): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const clean = classesStore.filter((c) => !isDummyClass(c));
+    fs.writeFileSync(CLASSES_FILE, JSON.stringify(clean, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to write classes.json:', e);
+  }
 }
 
 let classesStore: JEEClass[] = loadPersistedClasses();
 let subscriptionsStore: PushSubscriptionData[] = [];
 
 export async function getAllClasses(): Promise<JEEClass[]> {
-  if (supabaseConfig) {
+  const config = getSupabaseConfig();
+  if (config) {
     try {
-      const res = await fetch(`${supabaseConfig.url}/rest/v1/classes?select=*&order=start_at.asc`, {
-        headers: getSupabaseHeaders(supabaseConfig.key),
+      const res = await fetch(`${config.url}/rest/v1/classes?select=*&order=start_at.asc`, {
+        headers: getSupabaseHeaders(config.key),
       });
 
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          classesStore = data.map((row: any) => ({
+          // Clean out any dummy classes found in Supabase
+          const validRows = data.filter((row: any) => !isDummyClass(row));
+          const dummyRows = data.filter((row: any) => isDummyClass(row));
+
+          // Purge dummy rows from Supabase in background
+          if (dummyRows.length > 0) {
+            for (const d of dummyRows) {
+              if (d.id) {
+                fetch(`${config.url}/rest/v1/classes?id=eq.${d.id}`, {
+                  method: 'DELETE',
+                  headers: getSupabaseHeaders(config.key),
+                }).catch(() => {});
+              }
+            }
+          }
+
+          classesStore = validRows.map((row: any) => ({
             id: String(row.id),
             title: row.title,
-            subject: row.subject,
+            subject: normalizeSubject(row.subject),
             faculty: row.faculty || 'Faculty',
             topic: row.topic || '',
             description: row.description || '',
@@ -86,33 +155,38 @@ export async function getAllClasses(): Promise<JEEClass[]> {
             thumbnail_url: row.thumbnail_url || (row.youtube_id ? `https://img.youtube.com/vi/${row.youtube_id}/hqdefault.jpg` : ''),
             created_at: row.created_at || new Date().toISOString(),
           }));
+          persistClasses();
           return classesStore;
         }
+      } else {
+        const errText = await res.text();
+        console.error(`[Supabase getAllClasses error ${res.status}]: ${errText}`);
       }
     } catch (sbErr) {
       console.warn('Supabase fetch classes error, falling back to local cache:', sbErr);
     }
   }
 
-  return [...classesStore].sort(
-    (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
-  );
+  return [...classesStore]
+    .filter((c) => !isDummyClass(c))
+    .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
 }
 
 export async function getClassById(id: string): Promise<JEEClass | null> {
-  if (supabaseConfig) {
+  const config = getSupabaseConfig();
+  if (config) {
     try {
-      const res = await fetch(`${supabaseConfig.url}/rest/v1/classes?id=eq.${id}&select=*`, {
-        headers: getSupabaseHeaders(supabaseConfig.key),
+      const res = await fetch(`${config.url}/rest/v1/classes?id=eq.${id}&select=*`, {
+        headers: getSupabaseHeaders(config.key),
       });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data) && data[0]) {
+        if (Array.isArray(data) && data[0] && !isDummyClass(data[0])) {
           const row = data[0];
           return {
             id: String(row.id),
             title: row.title,
-            subject: row.subject,
+            subject: normalizeSubject(row.subject),
             faculty: row.faculty || 'Faculty',
             topic: row.topic || '',
             description: row.description || '',
@@ -121,7 +195,7 @@ export async function getClassById(id: string): Promise<JEEClass | null> {
             start_at: row.start_at,
             duration_min: Number(row.duration_min),
             is_embeddable: row.is_embeddable !== false,
-            thumbnail_url: row.thumbnail_url || `https://img.youtube.com/vi/${row.youtube_id}/hqdefault.jpg`,
+            thumbnail_url: row.thumbnail_url || (row.youtube_id ? `https://img.youtube.com/vi/${row.youtube_id}/hqdefault.jpg` : ''),
             created_at: row.created_at,
           };
         }
@@ -129,19 +203,21 @@ export async function getClassById(id: string): Promise<JEEClass | null> {
     } catch (e) {}
   }
 
-  const found = classesStore.find((c) => c.id === id);
+  const found = classesStore.find((c) => c.id === id && !isDummyClass(c));
   return found || null;
 }
 
 export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { id?: string }): Promise<JEEClass> {
+  const config = getSupabaseConfig();
+  const normalizedSubject = normalizeSubject(data.subject);
   const localId = data.id || `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const created_at = new Date().toISOString();
 
-  if (supabaseConfig) {
+  if (config) {
     try {
       const insertPayload: any = {
         title: data.title,
-        subject: data.subject,
+        subject: normalizedSubject,
         faculty: data.faculty || 'Faculty',
         topic: data.topic || '',
         description: data.description || '',
@@ -156,10 +232,10 @@ export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { 
         insertPayload.id = data.id;
       }
 
-      const res = await fetch(`${supabaseConfig.url}/rest/v1/classes`, {
+      const res = await fetch(`${config.url}/rest/v1/classes`, {
         method: 'POST',
         headers: {
-          ...getSupabaseHeaders(supabaseConfig.key),
+          ...getSupabaseHeaders(config.key),
           Prefer: 'return=representation',
         },
         body: JSON.stringify(insertPayload),
@@ -171,33 +247,43 @@ export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { 
         if (row && row.id) {
           const savedClass: JEEClass = {
             ...data,
+            subject: normalizedSubject,
             id: String(row.id),
             created_at: row.created_at || created_at,
           };
+          classesStore = classesStore.filter((c) => c.id !== savedClass.id && !isDummyClass(c));
           classesStore.push(savedClass);
+          persistClasses();
           return savedClass;
         }
+      } else {
+        const errText = await res.text();
+        console.error(`[Supabase createClass FAILED ${res.status}]: ${errText}`);
       }
     } catch (sbErr) {
-      console.warn('Supabase createClass warning, using local:', sbErr);
+      console.error('[Supabase createClass Exception]:', sbErr);
     }
   }
 
   const newClass: JEEClass = {
     ...data,
+    subject: normalizedSubject,
     id: localId,
     created_at,
   };
+  classesStore = classesStore.filter((c) => c.id !== localId && !isDummyClass(c));
   classesStore.push(newClass);
+  persistClasses();
   return newClass;
 }
 
 export async function updateClass(id: string, updates: Partial<JEEClass>): Promise<JEEClass | null> {
-  if (supabaseConfig) {
+  const config = getSupabaseConfig();
+  if (config) {
     try {
       const updatePayload: any = {};
       if (updates.title) updatePayload.title = updates.title;
-      if (updates.subject) updatePayload.subject = updates.subject;
+      if (updates.subject) updatePayload.subject = normalizeSubject(updates.subject);
       if (updates.faculty) updatePayload.faculty = updates.faculty;
       if (updates.topic !== undefined) updatePayload.topic = updates.topic;
       if (updates.description !== undefined) updatePayload.description = updates.description;
@@ -207,45 +293,70 @@ export async function updateClass(id: string, updates: Partial<JEEClass>): Promi
       if (updates.duration_min) updatePayload.duration_min = Number(updates.duration_min);
       if (updates.is_embeddable !== undefined) updatePayload.is_embeddable = updates.is_embeddable;
 
-      await fetch(`${supabaseConfig.url}/rest/v1/classes?id=eq.${id}`, {
+      const res = await fetch(`${config.url}/rest/v1/classes?id=eq.${id}`, {
         method: 'PATCH',
-        headers: getSupabaseHeaders(supabaseConfig.key),
+        headers: getSupabaseHeaders(config.key),
         body: JSON.stringify(updatePayload),
       });
-    } catch (e) {}
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error(`[Supabase updateClass FAILED ${res.status}]: ${errText}`);
+      }
+    } catch (e) {
+      console.error('[Supabase updateClass Exception]:', e);
+    }
   }
 
   const index = classesStore.findIndex((c) => c.id === id);
   if (index === -1) return null;
-  classesStore[index] = { ...classesStore[index], ...updates };
+  classesStore[index] = {
+    ...classesStore[index],
+    ...updates,
+    subject: updates.subject ? normalizeSubject(updates.subject) : classesStore[index].subject,
+  };
+  persistClasses();
   return classesStore[index];
 }
 
 export async function deleteClass(id: string): Promise<boolean> {
-  if (supabaseConfig) {
+  const config = getSupabaseConfig();
+  if (config) {
     try {
-      await fetch(`${supabaseConfig.url}/rest/v1/classes?id=eq.${id}`, {
+      const res = await fetch(`${config.url}/rest/v1/classes?id=eq.${id}`, {
         method: 'DELETE',
-        headers: getSupabaseHeaders(supabaseConfig.key),
+        headers: getSupabaseHeaders(config.key),
       });
-    } catch (e) {}
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error(`[Supabase deleteClass FAILED ${res.status}]: ${errText}`);
+      }
+    } catch (e) {
+      console.error('[Supabase deleteClass Exception]:', e);
+    }
   }
 
   classesStore = classesStore.filter((c) => c.id !== id);
+  persistClasses();
   return true;
 }
 
 export async function clearAllClasses(): Promise<void> {
-  if (supabaseConfig) {
+  const config = getSupabaseConfig();
+  if (config) {
     try {
-      await fetch(`${supabaseConfig.url}/rest/v1/classes?duration_min=gt.0`, {
+      const res = await fetch(`${config.url}/rest/v1/classes?duration_min=gt.0`, {
         method: 'DELETE',
-        headers: getSupabaseHeaders(supabaseConfig.key),
+        headers: getSupabaseHeaders(config.key),
       });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error(`[Supabase clearAllClasses FAILED ${res.status}]: ${errText}`);
+      }
     } catch (e) {}
   }
 
   classesStore = [];
+  persistClasses();
 }
 
 export async function resetClasses(): Promise<JEEClass[]> {
@@ -256,13 +367,17 @@ export async function resetClasses(): Promise<JEEClass[]> {
 export async function syncClasses(clientClasses: JEEClass[]): Promise<JEEClass[]> {
   if (!Array.isArray(clientClasses)) return getAllClasses();
 
-  if (supabaseConfig && clientClasses.length > 0) {
+  // Strip all dummy classes immediately
+  const cleanList = clientClasses.filter((c) => !isDummyClass(c));
+  const config = getSupabaseConfig();
+
+  if (config && cleanList.length > 0) {
     try {
-      for (const cls of clientClasses) {
+      for (const cls of cleanList) {
         if (!cls.title || !cls.youtube_url || !cls.start_at) continue;
         const row: any = {
           title: cls.title,
-          subject: cls.subject,
+          subject: normalizeSubject(cls.subject),
           faculty: cls.faculty || 'Faculty',
           topic: cls.topic || '',
           description: cls.description || '',
@@ -275,25 +390,25 @@ export async function syncClasses(clientClasses: JEEClass[]): Promise<JEEClass[]
 
         if (cls.id && UUID_REGEX.test(cls.id)) {
           row.id = cls.id;
-          await fetch(`${supabaseConfig.url}/rest/v1/classes`, {
+          await fetch(`${config.url}/rest/v1/classes`, {
             method: 'POST',
             headers: {
-              ...getSupabaseHeaders(supabaseConfig.key),
+              ...getSupabaseHeaders(config.key),
               Prefer: 'resolution=merge-duplicates',
             },
             body: JSON.stringify(row),
           });
         } else {
           const checkRes = await fetch(
-            `${supabaseConfig.url}/rest/v1/classes?start_at=eq.${encodeURIComponent(cls.start_at)}&select=id`,
-            { headers: getSupabaseHeaders(supabaseConfig.key) }
+            `${config.url}/rest/v1/classes?start_at=eq.${encodeURIComponent(cls.start_at)}&select=id`,
+            { headers: getSupabaseHeaders(config.key) }
           );
           if (checkRes.ok) {
             const existing = await checkRes.json();
             if (!Array.isArray(existing) || existing.length === 0) {
-              await fetch(`${supabaseConfig.url}/rest/v1/classes`, {
+              await fetch(`${config.url}/rest/v1/classes`, {
                 method: 'POST',
-                headers: getSupabaseHeaders(supabaseConfig.key),
+                headers: getSupabaseHeaders(config.key),
                 body: JSON.stringify(row),
               });
             }
@@ -363,7 +478,27 @@ export interface ServerBookmark {
   createdAt: string;
 }
 
-let bookmarksStore: ServerBookmark[] = [];
+const BOOKMARKS_FILE = path.join(DATA_DIR, 'bookmarks.json');
+
+function loadPersistedBookmarks(): ServerBookmark[] {
+  try {
+    if (fs.existsSync(BOOKMARKS_FILE)) {
+      const raw = fs.readFileSync(BOOKMARKS_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+  return [];
+}
+
+let bookmarksStore: ServerBookmark[] = loadPersistedBookmarks();
+
+function persistBookmarks(): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(BOOKMARKS_FILE, JSON.stringify(bookmarksStore, null, 2), 'utf8');
+  } catch (e) {}
+}
 
 export async function getAllServerBookmarks(): Promise<ServerBookmark[]> {
   return [...bookmarksStore];
@@ -376,11 +511,13 @@ export async function addServerBookmark(bm: ServerBookmark): Promise<ServerBookm
   } else {
     bookmarksStore.push(bm);
   }
+  persistBookmarks();
   return bm;
 }
 
 export async function deleteServerBookmark(id: string): Promise<boolean> {
   bookmarksStore = bookmarksStore.filter((b) => b.id !== id);
+  persistBookmarks();
   return true;
 }
 
@@ -393,7 +530,27 @@ export interface ServerStudyRecord {
   classTitle?: string;
 }
 
-let studyRecordsStore: ServerStudyRecord[] = [];
+const STUDY_HOURS_FILE = path.join(DATA_DIR, 'studyHours.json');
+
+function loadPersistedStudyRecords(): ServerStudyRecord[] {
+  try {
+    if (fs.existsSync(STUDY_HOURS_FILE)) {
+      const raw = fs.readFileSync(STUDY_HOURS_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+  return [];
+}
+
+let studyRecordsStore: ServerStudyRecord[] = loadPersistedStudyRecords();
+
+function persistStudyRecords(): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(STUDY_HOURS_FILE, JSON.stringify(studyRecordsStore, null, 2), 'utf8');
+  } catch (e) {}
+}
 
 export async function getAllServerStudyRecords(): Promise<ServerStudyRecord[]> {
   return [...studyRecordsStore];
@@ -401,6 +558,7 @@ export async function getAllServerStudyRecords(): Promise<ServerStudyRecord[]> {
 
 export async function saveServerStudyRecords(records: ServerStudyRecord[]): Promise<void> {
   studyRecordsStore = records;
+  persistStudyRecords();
 }
 
 export interface ServerAttendanceRecord {
@@ -411,7 +569,27 @@ export interface ServerAttendanceRecord {
   lastWatchedAt: string;
 }
 
-let attendanceStore: Record<string, ServerAttendanceRecord> = {};
+const ATTENDANCE_FILE = path.join(DATA_DIR, 'attendance.json');
+
+function loadPersistedAttendance(): Record<string, ServerAttendanceRecord> {
+  try {
+    if (fs.existsSync(ATTENDANCE_FILE)) {
+      const raw = fs.readFileSync(ATTENDANCE_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch (e) {}
+  return {};
+}
+
+let attendanceStore: Record<string, ServerAttendanceRecord> = loadPersistedAttendance();
+
+function persistAttendance(): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(ATTENDANCE_FILE, JSON.stringify(attendanceStore, null, 2), 'utf8');
+  } catch (e) {}
+}
 
 export async function getServerAttendance(): Promise<Record<string, ServerAttendanceRecord>> {
   return { ...attendanceStore };
@@ -419,4 +597,5 @@ export async function getServerAttendance(): Promise<Record<string, ServerAttend
 
 export async function saveServerAttendance(map: Record<string, ServerAttendanceRecord>): Promise<void> {
   attendanceStore = { ...attendanceStore, ...map };
-        }
+  persistAttendance();
+}

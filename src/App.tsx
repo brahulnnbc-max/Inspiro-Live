@@ -9,7 +9,7 @@ import { MomentsTable } from './components/MomentsTable';
 import { getLiveClockStatus } from './lib/istTime';
 import { subscribeToPushNotifications, sendTestNotification } from './lib/pushClient';
 import { InspiroLogo } from './components/InspiroLogo';
-import { fetchAllClasses } from './lib/clientData';
+import { fetchAllClasses, isDummyClass } from './lib/clientData';
 import { checkClassroomNotifications, InAppAlertPayload } from './lib/notificationMonitor';
 import { X, Play, Clock } from 'lucide-react';
 import { AppView } from './components/Navbar';
@@ -23,7 +23,9 @@ export default function App() {
           localStorage.getItem('inspiro_jee_classes_backup_v2');
         if (raw) {
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) return parsed;
+          if (Array.isArray(parsed)) {
+            return parsed.filter((c: any) => !isDummyClass(c));
+          }
         }
       } catch {}
     }

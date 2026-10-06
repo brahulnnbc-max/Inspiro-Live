@@ -1,4 +1,16 @@
-"dependencies": {
+{
+  "name": "inspiro-live",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
@@ -13,7 +25,6 @@
     "vite": "^8.3.0",
     "@supabase/supabase-js": "^2.49.1",
     "web-push": "^3.6.7"
-    
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
@@ -24,8 +35,10 @@
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.3.3",
-    "typescript": "^7.0.2"
+    "typescript": "^5.8.2"
   },
   "engines": {
     "node": ">=20.0.0"
   }
+}
+

@@ -26,6 +26,18 @@ import { checkScheduleOverlap } from '../lib/overlap.ts';
 
 export const apiRouter = Router();
 
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@jeelivesync.edu';
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  } catch (err) {
+    console.warn('VAPID setup warning:', err);
+  }
+}
+
 // Disable caching across Vercel Edge CDN, proxies, and browsers
 apiRouter.use((_req: Request, res: Response, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
@@ -150,6 +162,7 @@ apiRouter.post('/classes', async (req: Request, res: Response) => {
     const embedResult = await verifyYouTubeEmbeddability(youtube_id);
 
     const newClass = await createClass({
+      id: req.body.id,
       title: title.trim(),
       subject: subject || 'Physics',
       faculty: faculty ? faculty.trim() : 'JEE Faculty',
