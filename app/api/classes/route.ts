@@ -3,10 +3,19 @@ import { getAllClasses, createClass } from '../../../src/server/db';
 import { extractYouTubeId, verifyYouTubeEmbeddability } from '../../../src/lib/youtube';
 import { checkScheduleOverlap } from '../../../src/lib/overlap';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET() {
   try {
     const classes = await getAllClasses();
-    return NextResponse.json({ classes });
+    return NextResponse.json({ classes }, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      }
+    });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
@@ -28,20 +37,13 @@ export async function POST(request: Request) {
 
     const existingClasses = await getAllClasses();
     const overlap = checkScheduleOverlap(
-      {
-        start_at,
-        duration_min: Number(duration_min),
-      },
+      { start_at, duration_min: Number(duration_min) },
       existingClasses
     );
 
     if (overlap.hasOverlap) {
       return NextResponse.json(
-        {
-          error: 'Overlap Conflict',
-          message: overlap.message,
-          conflictingClass: overlap.conflictingClass,
-        },
+        { error: 'Overlap Conflict', message: overlap.message, conflictingClass: overlap.conflictingClass },
         { status: 409 }
       );
     }
