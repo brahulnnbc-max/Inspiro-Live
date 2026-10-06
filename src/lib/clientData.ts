@@ -108,8 +108,9 @@ function setLocalClasses(classes: JEEClass[]): void {
 export async function fetchAllClasses(): Promise<JEEClass[]> {
   try {
     const res = await fetch('/api/classes', {
-      headers: { 'Accept': 'application/json' },
-    });
+  headers: { 'Accept': 'application/json' },
+  cache: 'no-store',
+});
 
     if (res.ok) {
       const data = await res.json();
