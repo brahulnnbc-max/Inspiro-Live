@@ -48,7 +48,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const embedResult = await verifyYouTubeEmbeddability(youtube_id);
+    // FAST YouTube check with 3s timeout - don't block save
+    let embedResult: any = { isEmbeddable: true, thumbnailUrl: `https://img.youtube.com/vi/${youtube_id}/hqdefault.jpg` };
+    try {
+      const ytCheck = verifyYouTubeEmbeddability(youtube_id);
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('yt-timeout')), 3000));
+      embedResult = await Promise.race([ytCheck, timeout]) as any;
+    } catch {
+      // keep default thumbnail
+    }
 
     const newClass = await createClass({
       title: title.trim(),
@@ -60,11 +68,16 @@ export async function POST(request: Request) {
       youtube_id,
       start_at: new Date(start_at).toISOString(),
       duration_min: Number(duration_min),
-      is_embeddable: embedResult.isEmbeddable,
+      is_embeddable: embedResult.isEmbeddable ?? true,
       thumbnail_url: embedResult.thumbnailUrl || `https://img.youtube.com/vi/${youtube_id}/hqdefault.jpg`,
     });
 
-    return NextResponse.json({ class: newClass }, { status: 201 });
+    return NextResponse.json({ class: newClass }, { 
+      status: 201,
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      }
+    });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
