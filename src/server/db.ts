@@ -32,55 +32,7 @@ let subscriptionsStore: PushSubscriptionData[] = [];
 // CLASSES - Now using Supabase with file fallback
 // =====================================================
 
-const CLASSES_FILE = path.join(DATA_DIR, 'classes.json');
 
-function generateInitialClasses(): JEEClass[] {
-  const now = Date.now();
-  return [
-    {
-      id: 'class-physics-rotational',
-      title: 'Rotational Motion: Moment of Inertia & Pure Rolling',
-      subject: 'Physics',
-      faculty: 'Er. R. Sharma (Ex-IIT Delhi)',
-      topic: 'Mechanics (JEE Advanced Level)',
-      description: 'Rigid body dynamics, theorem of parallel & perpendicular axes, and instantaneous center of rotation with previous year question breakdowns.',
-      youtube_url: 'https://www.youtube.com/watch?v=x0_z2_t6a_w',
-      youtube_id: 'x0_z2_t6a_w',
-      start_at: new Date(now - 15 * 60 * 1000).toISOString(),
-      duration_min: 90,
-      is_embeddable: true,
-      notification_15m_sent: false,
-      notification_live_sent: false,
-      created_at: new Date(now - 86400000).toISOString(),
-    },
-  ];
-}
-
-function loadPersistedClasses(): JEEClass[] {
-  try {
-    if (fs.existsSync(CLASSES_FILE)) {
-      const raw = fs.readFileSync(CLASSES_FILE, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to read classes.json:', e);
-  }
-  return [];
-}
-
-function persistClasses(classes: JEEClass[]) {
-  try {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(CLASSES_FILE, JSON.stringify(classes, null, 2), 'utf8');
-  } catch (e) {
-    console.error('Failed to write classes.json:', e);
-  }
-}
-
-let classesStore: JEEClass[] = loadPersistedClasses();
 
 export async function getAllClasses(): Promise<JEEClass[]> {
   if (supabase) {
