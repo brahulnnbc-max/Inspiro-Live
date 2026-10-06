@@ -41,8 +41,8 @@ function clearDeletedClassId(id: string) {
 }
 
 // Safe localStorage access
-function getLocalClasses(): JEEClass[] {
-  if (typeof window === 'undefined') return [];
+function getLocalClasses(): JEEClass[] | null {
+  if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw !== null) {
@@ -52,7 +52,7 @@ function getLocalClasses(): JEEClass[] {
   } catch (e) {
     console.warn('localStorage read error:', e);
   }
-  return [];
+  return null;
 }
 
 function getBackupClasses(): JEEClass[] {
@@ -71,10 +71,7 @@ function setLocalClasses(classes: JEEClass[]): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(classes));
-    // Also save in long-term backup key
-    if (classes.length > 0) {
-      localStorage.setItem(BACKUP_KEY, JSON.stringify(classes));
-    }
+    localStorage.setItem(BACKUP_KEY, JSON.stringify(classes));
   } catch (e) {
     console.warn('localStorage write error:', e);
   }
@@ -144,7 +141,8 @@ function reconcileClasses(
 export async function fetchAllClasses(): Promise<JEEClass[]> {
   const local = getLocalClasses();
   const backup = getBackupClasses();
-  const effectiveLocal = local.length > 0 ? local : backup;
+  // Only fallback to backup if local was completely uninitialized (null)
+  const effectiveLocal: JEEClass[] = local !== null ? local : (backup.length > 0 ? backup : []);
 
   try {
     const res = await fetch('/api/classes', {
@@ -175,7 +173,7 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
     // Network / static host fallback
   }
 
-  return effectiveLocal.length > 0 ? effectiveLocal : generateDefaultClasses();
+  return effectiveLocal;
 }
 
 /**
@@ -194,7 +192,7 @@ export async function saveNewClass(
   clearDeletedClassId(localId);
 
   // 1. Immediately store in localStorage & backup so it is 100% saved on this device
-  const current = getLocalClasses();
+  const current = getLocalClasses() || [];
   const updated = [...current.filter((c) => c.id !== localId), created];
   setLocalClasses(updated);
 
@@ -229,7 +227,7 @@ export async function removeClass(id: string): Promise<boolean> {
   addDeletedClassId(id);
 
   // 2. Immediately update local storage
-  const current = getLocalClasses();
+  const current = getLocalClasses() || [];
   const updated = current.filter((c) => c.id !== id);
   setLocalClasses(updated);
 
@@ -249,7 +247,7 @@ export async function removeClass(id: string): Promise<boolean> {
  * Clear all classes (empty timetable)
  */
 export async function clearAllClassesFromStore(): Promise<boolean> {
-  const current = getLocalClasses();
+  const current = getLocalClasses() || [];
   current.forEach((c) => addDeletedClassId(c.id));
   setLocalClasses([]);
   try {
@@ -370,4 +368,4 @@ export function getAllAttendance(): Record<string, ClassAttendance> {
   } catch (e) {
     return {};
   }
-}
+    }
