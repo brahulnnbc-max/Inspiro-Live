@@ -174,8 +174,9 @@ export async function removeClass(id: string): Promise<boolean> {
   // 2. Call backend to remove from persistent file
   try {
     await fetch(`/api/classes/${id}`, {
-      method: 'DELETE',
-    });
+  method: 'DELETE',
+  cache: 'no-store',
+});
   } catch (err) {
     // Continue with local delete
   }
