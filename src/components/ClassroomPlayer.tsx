@@ -1053,24 +1053,26 @@ export const ClassroomPlayer: React.FC<Props> = ({
                   <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto scrollbar-none pl-1">
                     {/* Note Key Moment (Available during live classes in rotate mode) */}
                     <button
-                      onClick={handleTriggerBookmark}
-                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 transition-colors flex items-center gap-1.5 whitespace-nowrap"
-                      title="Note important lecture moment or mistake (Shortcut: B)"
-                    >
-                      <BookmarkPlus className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Note Moment</span>
-                    </button>
-
-                    {/* Moments Vault count button */}
-                    {bookmarks.length > 0 && (
-                      <button
-                        onClick={() => setIsBookmarksVaultOpen(true)}
-                        className="px-2 py-1 text-xs font-mono rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition-colors flex items-center gap-1 whitespace-nowrap"
-                        title="View saved moments"
-                      >
-                        <Bookmark className="w-3 h-3 text-amber-400" />
-                        <span>{bookmarks.length}</span>
-                      </button>
+  onClick={handleTriggerBookmark}
+  className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 whitespace-nowrap active:scale-95 ${
+    justSavedTime
+      ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold shadow-md shadow-emerald-500/40'
+      : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+  }`}
+  title="1-Click Instant Timestamp to Moments Table (Shortcut: B)"
+>
+  {justSavedTime ? (
+    <>
+      <CheckCircle2 className="w-3.5 h-3.5 text-slate-950" />
+      <span>Saved {justSavedTime}!</span>
+    </>
+  ) : (
+    <>
+      <BookmarkPlus className="w-3.5 h-3.5 text-amber-400" />
+      <span>Note Moment</span>
+    </>
+  )}
+</button>
                     )}
 
                     <button
