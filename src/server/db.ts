@@ -1,14 +1,10 @@
 import type { JEEClass, PushSubscriptionData } from '../types/class.ts';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-// Default seeded classes - empty by default so user has absolute control over timetable
-export function generateInitialClasses(): JEEClass[] {
-  return [];
-}
 
 export const DUMMY_IDS = new Set([
   'class-physics-rotational',
@@ -37,19 +33,51 @@ export function normalizeSubject(subject: string): 'Physics' | 'Chemistry' | 'Ma
   return 'Physics';
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function ensureValidUuid(id?: string): string {
+  if (id && UUID_REGEX.test(id)) {
+    return id;
+  }
+  return crypto.randomUUID();
+}
+
 // -------------------------------------------------------------
-// Cloud Persistence via Supabase REST API (Zero external npm packages needed)
+// Environment & Supabase Configuration
 // -------------------------------------------------------------
-function getSupabaseConfig(): { url: string; key: string } | null {
+const ENV_FILE = path.resolve(process.cwd(), '.env');
+
+export interface SupabaseConfig {
+  url: string;
+  key: string;
+}
+
+export function getSupabaseConfig(): SupabaseConfig | null {
+  // Check if .env file has newer vars on disk
+  if (fs.existsSync(ENV_FILE)) {
+    try {
+      const content = fs.readFileSync(ENV_FILE, 'utf8');
+      const parsed = dotenv.parse(content);
+      for (const [k, v] of Object.entries(parsed)) {
+        if (!process.env[k]) {
+          process.env[k] = v;
+        }
+      }
+    } catch {}
+  }
+
   let rawUrl = (
-    process.env.NEXT_PUBLIC_SUPABASE_URL ||
     process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
     ''
   ).trim();
+
   const key = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     ''
   ).trim();
 
@@ -78,8 +106,6 @@ function getSupabaseConfig(): { url: string; key: string } | null {
   return { url: rawUrl, key };
 }
 
-const supabaseConfig = getSupabaseConfig();
-
 function getSupabaseHeaders(key: string) {
   return {
     apikey: key,
@@ -88,47 +114,262 @@ function getSupabaseHeaders(key: string) {
   };
 }
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function maskString(str?: string, keepHead = 8, keepTail = 4): string {
+  if (!str) return '';
+  if (str.length <= keepHead + keepTail) return '••••••••';
+  return `${str.slice(0, keepHead)}••••••••${str.slice(-keepTail)}`;
+}
 
+// -------------------------------------------------------------
+// Live Health & Status Diagnostics
+// -------------------------------------------------------------
+export interface SupabaseHealth {
+  configured: boolean;
+  connected: boolean;
+  status: 'connected' | 'paused' | 'auth_error' | 'table_missing' | 'unreachable' | 'not_configured';
+  message: string;
+  url?: string;
+  maskedKey?: string;
+  rowCount?: number;
+  lastChecked: number;
+}
+
+let cachedHealth: SupabaseHealth = {
+  configured: false,
+  connected: false,
+  status: 'not_configured',
+  message: 'Supabase URL & API Key not configured. Running on Server Backup.',
+  lastChecked: 0,
+};
+
+export async function testSupabaseConnection(forceRefresh = true): Promise<SupabaseHealth> {
+  const now = Date.now();
+  if (!forceRefresh && now - cachedHealth.lastChecked < 10000) {
+    return cachedHealth;
+  }
+
+  const config = getSupabaseConfig();
+  if (!config) {
+    cachedHealth = {
+      configured: false,
+      connected: false,
+      status: 'not_configured',
+      message: 'No Supabase URL or Key found in environment. Running on Server Backup.',
+      lastChecked: now,
+    };
+    return cachedHealth;
+  }
+
+  const maskedUrl = config.url.replace(/^(https?:\/\/)([^.]+)(.*)$/, '$1$2$3');
+  const maskedKey = maskString(config.key, 12, 6);
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(`${config.url}/rest/v1/classes?select=id&limit=1`, {
+      method: 'GET',
+      headers: {
+        ...getSupabaseHeaders(config.key),
+        Prefer: 'count=exact',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const responseText = await res.text();
+
+    if (res.ok) {
+      const contentRange = res.headers.get('content-range') || '';
+      const countMatch = contentRange.match(/\/(\d+)/);
+      const rowCount = countMatch ? parseInt(countMatch[1], 10) : undefined;
+
+      cachedHealth = {
+        configured: true,
+        connected: true,
+        status: 'connected',
+        message: 'Successfully connected to Supabase PostgreSQL database.',
+        url: maskedUrl,
+        maskedKey,
+        rowCount,
+        lastChecked: now,
+      };
+      return cachedHealth;
+    }
+
+    // Check for Supabase Free Tier Inactivity Pause
+    if (res.status === 503 || responseText.toLowerCase().includes('paused')) {
+      cachedHealth = {
+        configured: true,
+        connected: false,
+        status: 'paused',
+        message: 'Supabase project is currently paused (Free tier inactivity pause). All classes are safely served from Server Backup.',
+        url: maskedUrl,
+        maskedKey,
+        lastChecked: now,
+      };
+      return cachedHealth;
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      cachedHealth = {
+        configured: true,
+        connected: false,
+        status: 'auth_error',
+        message: 'Supabase authentication failed. Check your API key or Row Level Security (RLS) policies.',
+        url: maskedUrl,
+        maskedKey,
+        lastChecked: now,
+      };
+      return cachedHealth;
+    }
+
+    if (res.status === 404 || responseText.includes('relation "public.classes" does not exist')) {
+      cachedHealth = {
+        configured: true,
+        connected: false,
+        status: 'table_missing',
+        message: 'Table "classes" does not exist in Supabase. Run supabase/schema.sql in the Supabase SQL editor.',
+        url: maskedUrl,
+        maskedKey,
+        lastChecked: now,
+      };
+      return cachedHealth;
+    }
+
+    cachedHealth = {
+      configured: true,
+      connected: false,
+      status: 'unreachable',
+      message: `Supabase returned HTTP ${res.status}: ${responseText.slice(0, 150)}`,
+      url: maskedUrl,
+      maskedKey,
+      lastChecked: now,
+    };
+    return cachedHealth;
+  } catch (err: any) {
+    const isTimeout = err.name === 'AbortError';
+    cachedHealth = {
+      configured: true,
+      connected: false,
+      status: 'unreachable',
+      message: isTimeout
+        ? 'Supabase connection timed out. Free project may be paused or waking up.'
+        : `Could not connect to Supabase: ${err.message}`,
+      url: maskedUrl,
+      maskedKey,
+      lastChecked: now,
+    };
+    return cachedHealth;
+  }
+}
+
+// -------------------------------------------------------------
+// Save Supabase Configuration to .env
+// -------------------------------------------------------------
+export async function updateSupabaseConfig(url: string, key: string): Promise<SupabaseHealth> {
+  const cleanUrl = url.trim().replace(/\/+$/, '');
+  const cleanKey = key.trim();
+
+  // 1. Update in-memory process.env immediately
+  process.env.SUPABASE_URL = cleanUrl;
+  process.env.SUPABASE_ANON_KEY = cleanKey;
+  process.env.VITE_SUPABASE_URL = cleanUrl;
+  process.env.VITE_SUPABASE_ANON_KEY = cleanKey;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = cleanUrl;
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = cleanKey;
+
+  // 2. Persist to .env file
+  try {
+    let existingEnv = '';
+    if (fs.existsSync(ENV_FILE)) {
+      existingEnv = fs.readFileSync(ENV_FILE, 'utf8');
+    }
+
+    const envMap: Record<string, string> = {};
+    if (existingEnv) {
+      const parsed = dotenv.parse(existingEnv);
+      Object.assign(envMap, parsed);
+    }
+
+    envMap['SUPABASE_URL'] = cleanUrl;
+    envMap['SUPABASE_ANON_KEY'] = cleanKey;
+    envMap['VITE_SUPABASE_URL'] = cleanUrl;
+    envMap['VITE_SUPABASE_ANON_KEY'] = cleanKey;
+    envMap['NEXT_PUBLIC_SUPABASE_URL'] = cleanUrl;
+    envMap['NEXT_PUBLIC_SUPABASE_ANON_KEY'] = cleanKey;
+
+    const newContent = Object.entries(envMap)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n');
+
+    fs.writeFileSync(ENV_FILE, newContent + '\n', 'utf8');
+  } catch (e) {
+    console.warn('Failed to write .env file:', e);
+  }
+
+  // 3. Immediately test connection
+  return await testSupabaseConnection(true);
+}
+
+// -------------------------------------------------------------
+// System 2: Local Server Backup Layer (Persistent Disk & Memory)
+// -------------------------------------------------------------
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const CLASSES_FILE = path.join(DATA_DIR, 'classes.json');
 const TMP_CLASSES_FILE = path.join('/tmp', 'inspiro_classes.json');
 
 function loadPersistedClasses(): JEEClass[] {
-  // 1. Try writable /tmp first (persists across warm lambda invocations in serverless)
+  let loaded: any[] = [];
+
+  // 1. Try writable /tmp first
   try {
     if (fs.existsSync(TMP_CLASSES_FILE)) {
       const raw = fs.readFileSync(TMP_CLASSES_FILE, 'utf8');
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((c) => !isDummyClass(c));
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        loaded = parsed;
       }
     }
   } catch (e) {}
 
   // 2. Try repo data/classes.json
-  try {
-    if (fs.existsSync(CLASSES_FILE)) {
-      const raw = fs.readFileSync(CLASSES_FILE, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((c) => !isDummyClass(c));
+  if (loaded.length === 0) {
+    try {
+      if (fs.existsSync(CLASSES_FILE)) {
+        const raw = fs.readFileSync(CLASSES_FILE, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          loaded = parsed;
+        }
       }
-    }
-  } catch (e) {}
-  return [];
+    } catch (e) {}
+  }
+
+  // Ensure all classes have valid UUIDs for seamless Supabase compatibility
+  return loaded
+    .filter((c) => !isDummyClass(c))
+    .map((c) => ({
+      ...c,
+      id: ensureValidUuid(c.id),
+      subject: normalizeSubject(c.subject),
+    }));
 }
+
+let classesStore: JEEClass[] = loadPersistedClasses();
+let classesUpdatedAt: number = Date.now();
+let subscriptionsStore: PushSubscriptionData[] = [];
 
 function persistClasses(): void {
   const clean = classesStore.filter((c) => !isDummyClass(c));
   const dataStr = JSON.stringify(clean, null, 2);
 
-  // Write to /tmp (always writable in Vercel serverless / Lambda / Cloud Run)
+  // Write to /tmp
   try {
     fs.writeFileSync(TMP_CLASSES_FILE, dataStr, 'utf8');
   } catch (e) {}
 
-  // Write to data/classes.json (for local development & persistent disk)
+  // Write to data/classes.json
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -137,17 +378,40 @@ function persistClasses(): void {
   } catch (e) {}
 }
 
-let classesStore: JEEClass[] = loadPersistedClasses();
-let classesUpdatedAt: number = Date.now();
-let subscriptionsStore: PushSubscriptionData[] = [];
+// Immediately persist loaded classes if any had IDs normalized to UUIDs
+persistClasses();
+
+// -------------------------------------------------------------
+// Dual-System Storage Accessors (Supabase Primary + Backup Fallback)
+// -------------------------------------------------------------
+
+export async function getOverallStorageStatus() {
+  const health = await testSupabaseConnection(false);
+  return {
+    primary: health,
+    backup: {
+      engine: 'Server Disk & Memory Backup',
+      classesCount: classesStore.length,
+      classesFilePath: CLASSES_FILE,
+      lastUpdated: classesUpdatedAt,
+      isHealthy: true,
+    },
+    activeEngine: health.connected ? 'supabase' : 'server_backup',
+  };
+}
 
 export async function getAllClasses(): Promise<JEEClass[]> {
   const result = await getAllClassesWithTimestamp();
   return result.classes;
 }
 
-export async function getAllClassesWithTimestamp(): Promise<{ classes: JEEClass[]; updatedAt: number }> {
+export async function getAllClassesWithTimestamp(): Promise<{
+  classes: JEEClass[];
+  updatedAt: number;
+  storageSource: 'supabase' | 'server_backup';
+}> {
   const config = getSupabaseConfig();
+
   if (config) {
     try {
       const res = await fetch(`${config.url}/rest/v1/classes?select=*&order=start_at.asc`, {
@@ -157,21 +421,7 @@ export async function getAllClassesWithTimestamp(): Promise<{ classes: JEEClass[
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          // Clean out any dummy classes found in Supabase
           const validRows = data.filter((row: any) => !isDummyClass(row));
-          const dummyRows = data.filter((row: any) => isDummyClass(row));
-
-          // Purge dummy rows from Supabase in background
-          if (dummyRows.length > 0) {
-            for (const d of dummyRows) {
-              if (d.id) {
-                fetch(`${config.url}/rest/v1/classes?id=eq.${d.id}`, {
-                  method: 'DELETE',
-                  headers: getSupabaseHeaders(config.key),
-                }).catch(() => {});
-              }
-            }
-          }
 
           classesStore = validRows.map((row: any) => ({
             id: String(row.id),
@@ -188,22 +438,45 @@ export async function getAllClassesWithTimestamp(): Promise<{ classes: JEEClass[
             thumbnail_url: row.thumbnail_url || (row.youtube_id ? `https://img.youtube.com/vi/${row.youtube_id}/hqdefault.jpg` : ''),
             created_at: row.created_at || new Date().toISOString(),
           }));
+
+          // Keep Server Backup 100% in sync with Supabase
+          classesUpdatedAt = Date.now();
           persistClasses();
-          return { classes: classesStore, updatedAt: classesUpdatedAt };
+
+          cachedHealth.connected = true;
+          cachedHealth.status = 'connected';
+
+          return {
+            classes: classesStore,
+            updatedAt: classesUpdatedAt,
+            storageSource: 'supabase',
+          };
         }
       } else {
         const errText = await res.text();
-        console.error(`[Supabase getAllClasses error ${res.status}]: ${errText}`);
+        console.warn(`[Supabase fetch HTTP ${res.status}]: ${errText.slice(0, 100)} - Falling back to Server Backup`);
+        if (res.status === 503 || errText.toLowerCase().includes('paused')) {
+          cachedHealth.connected = false;
+          cachedHealth.status = 'paused';
+        }
       }
-    } catch (sbErr) {
-      console.warn('Supabase fetch classes error, falling back to local cache:', sbErr);
+    } catch (sbErr: any) {
+      console.warn('Supabase fetch failed, smoothly serving from Server Backup:', sbErr.message);
+      cachedHealth.connected = false;
+      cachedHealth.status = 'unreachable';
     }
   }
 
+  // Fallback to Server Backup
   const clean = [...classesStore]
     .filter((c) => !isDummyClass(c))
     .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
-  return { classes: clean, updatedAt: classesUpdatedAt };
+
+  return {
+    classes: clean,
+    updatedAt: classesUpdatedAt,
+    storageSource: 'server_backup',
+  };
 }
 
 export async function getClassById(id: string): Promise<JEEClass | null> {
@@ -242,14 +515,29 @@ export async function getClassById(id: string): Promise<JEEClass | null> {
 }
 
 export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { id?: string }): Promise<JEEClass> {
-  const config = getSupabaseConfig();
   const normalizedSubject = normalizeSubject(data.subject);
-  const localId = data.id || `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const targetId = ensureValidUuid(data.id);
   const created_at = new Date().toISOString();
 
+  const newClass: JEEClass = {
+    ...data,
+    subject: normalizedSubject,
+    id: targetId,
+    created_at,
+  };
+
+  // 1. ALWAYS save to Server Backup immediately (Zero data loss guarantee)
+  classesStore = classesStore.filter((c) => c.id !== targetId && !isDummyClass(c));
+  classesStore.push(newClass);
+  classesUpdatedAt = Date.now();
+  persistClasses();
+
+  // 2. Save to Supabase Cloud if configured
+  const config = getSupabaseConfig();
   if (config) {
     try {
       const insertPayload: any = {
+        id: targetId,
         title: data.title,
         subject: normalizedSubject,
         faculty: data.faculty || 'Faculty',
@@ -260,11 +548,8 @@ export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { 
         start_at: data.start_at,
         duration_min: Number(data.duration_min),
         is_embeddable: data.is_embeddable !== false,
+        thumbnail_url: data.thumbnail_url,
       };
-
-      if (data.id && UUID_REGEX.test(data.id)) {
-        insertPayload.id = data.id;
-      }
 
       const res = await fetch(`${config.url}/rest/v1/classes`, {
         method: 'POST',
@@ -279,41 +564,34 @@ export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { 
         const inserted = await res.json();
         const row = Array.isArray(inserted) ? inserted[0] : inserted;
         if (row && row.id) {
-          const savedClass: JEEClass = {
-            ...data,
-            subject: normalizedSubject,
-            id: String(row.id),
-            created_at: row.created_at || created_at,
-          };
-          classesStore = classesStore.filter((c) => c.id !== savedClass.id && !isDummyClass(c));
-          classesStore.push(savedClass);
-          classesUpdatedAt = Date.now();
+          newClass.id = String(row.id);
+          newClass.created_at = row.created_at || created_at;
           persistClasses();
-          return savedClass;
         }
       } else {
         const errText = await res.text();
-        console.error(`[Supabase createClass FAILED ${res.status}]: ${errText}`);
+        console.warn(`[Supabase createClass warning HTTP ${res.status}]: ${errText.slice(0, 100)} - Safely saved in Server Backup.`);
       }
-    } catch (sbErr) {
-      console.error('[Supabase createClass Exception]:', sbErr);
+    } catch (sbErr: any) {
+      console.warn('Supabase createClass error, preserved in Server Backup:', sbErr.message);
     }
   }
 
-  const newClass: JEEClass = {
-    ...data,
-    subject: normalizedSubject,
-    id: localId,
-    created_at,
-  };
-  classesStore = classesStore.filter((c) => c.id !== localId && !isDummyClass(c));
-  classesStore.push(newClass);
-  classesUpdatedAt = Date.now();
-  persistClasses();
   return newClass;
 }
 
 export async function updateClass(id: string, updates: Partial<JEEClass>): Promise<JEEClass | null> {
+  const index = classesStore.findIndex((c) => c.id === id);
+  if (index === -1) return null;
+
+  classesStore[index] = {
+    ...classesStore[index],
+    ...updates,
+    subject: updates.subject ? normalizeSubject(updates.subject) : classesStore[index].subject,
+  };
+  classesUpdatedAt = Date.now();
+  persistClasses();
+
   const config = getSupabaseConfig();
   if (config) {
     try {
@@ -328,74 +606,55 @@ export async function updateClass(id: string, updates: Partial<JEEClass>): Promi
       if (updates.start_at) updatePayload.start_at = updates.start_at;
       if (updates.duration_min) updatePayload.duration_min = Number(updates.duration_min);
       if (updates.is_embeddable !== undefined) updatePayload.is_embeddable = updates.is_embeddable;
+      if (updates.thumbnail_url !== undefined) updatePayload.thumbnail_url = updates.thumbnail_url;
 
-      const res = await fetch(`${config.url}/rest/v1/classes?id=eq.${id}`, {
+      await fetch(`${config.url}/rest/v1/classes?id=eq.${id}`, {
         method: 'PATCH',
         headers: getSupabaseHeaders(config.key),
         body: JSON.stringify(updatePayload),
       });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error(`[Supabase updateClass FAILED ${res.status}]: ${errText}`);
-      }
-    } catch (e) {
-      console.error('[Supabase updateClass Exception]:', e);
+    } catch (e: any) {
+      console.warn('Supabase updateClass error, saved in Server Backup:', e.message);
     }
   }
 
-  const index = classesStore.findIndex((c) => c.id === id);
-  if (index === -1) return null;
-  classesStore[index] = {
-    ...classesStore[index],
-    ...updates,
-    subject: updates.subject ? normalizeSubject(updates.subject) : classesStore[index].subject,
-  };
-  classesUpdatedAt = Date.now();
-  persistClasses();
   return classesStore[index];
 }
 
 export async function deleteClass(id: string): Promise<boolean> {
-  const config = getSupabaseConfig();
-  if (config) {
-    try {
-      const res = await fetch(`${config.url}/rest/v1/classes?id=eq.${id}`, {
-        method: 'DELETE',
-        headers: getSupabaseHeaders(config.key),
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error(`[Supabase deleteClass FAILED ${res.status}]: ${errText}`);
-      }
-    } catch (e) {
-      console.error('[Supabase deleteClass Exception]:', e);
-    }
-  }
-
   classesStore = classesStore.filter((c) => c.id !== id);
   classesUpdatedAt = Date.now();
   persistClasses();
+
+  const config = getSupabaseConfig();
+  if (config) {
+    try {
+      await fetch(`${config.url}/rest/v1/classes?id=eq.${id}`, {
+        method: 'DELETE',
+        headers: getSupabaseHeaders(config.key),
+      });
+    } catch (e: any) {
+      console.warn('Supabase deleteClass error, deleted from Server Backup:', e.message);
+    }
+  }
+
   return true;
 }
 
 export async function clearAllClasses(): Promise<void> {
-  const config = getSupabaseConfig();
-  if (config) {
-    try {
-      const res = await fetch(`${config.url}/rest/v1/classes?duration_min=gt.0`, {
-        method: 'DELETE',
-        headers: getSupabaseHeaders(config.key),
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error(`[Supabase clearAllClasses FAILED ${res.status}]: ${errText}`);
-      }
-    } catch (e) {}
-  }
-
   classesStore = [];
   classesUpdatedAt = Date.now();
   persistClasses();
+
+  const config = getSupabaseConfig();
+  if (config) {
+    try {
+      await fetch(`${config.url}/rest/v1/classes?duration_min=gt.0`, {
+        method: 'DELETE',
+        headers: getSupabaseHeaders(config.key),
+      });
+    } catch (e) {}
+  }
 }
 
 export async function resetClasses(): Promise<JEEClass[]> {
@@ -403,82 +662,147 @@ export async function resetClasses(): Promise<JEEClass[]> {
   return [];
 }
 
+// -------------------------------------------------------------
+// Two-Way Sync Utilities (Backup <-> Supabase)
+// -------------------------------------------------------------
+
+export async function pushBackupToSupabase(): Promise<{ success: boolean; count: number; error?: string }> {
+  const config = getSupabaseConfig();
+  if (!config) {
+    return { success: false, count: 0, error: 'Supabase URL & API Key are not configured.' };
+  }
+
+  const cleanList = classesStore.filter((c) => !isDummyClass(c));
+  if (cleanList.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  let successCount = 0;
+  const errors: string[] = [];
+
+  for (const cls of cleanList) {
+    const row = {
+      id: ensureValidUuid(cls.id),
+      title: cls.title,
+      subject: normalizeSubject(cls.subject),
+      faculty: cls.faculty || 'Faculty',
+      topic: cls.topic || '',
+      description: cls.description || '',
+      youtube_url: cls.youtube_url,
+      youtube_id: cls.youtube_id,
+      start_at: cls.start_at,
+      duration_min: Number(cls.duration_min),
+      is_embeddable: cls.is_embeddable !== false,
+      thumbnail_url: cls.thumbnail_url || (cls.youtube_id ? `https://img.youtube.com/vi/${cls.youtube_id}/hqdefault.jpg` : ''),
+    };
+
+    try {
+      const res = await fetch(`${config.url}/rest/v1/classes`, {
+        method: 'POST',
+        headers: {
+          ...getSupabaseHeaders(config.key),
+          Prefer: 'resolution=merge-duplicates',
+        },
+        body: JSON.stringify(row),
+      });
+
+      if (res.ok) {
+        successCount++;
+      } else {
+        const text = await res.text();
+        errors.push(`Row ${row.title}: ${text.slice(0, 80)}`);
+      }
+    } catch (e: any) {
+      errors.push(`Row ${row.title}: ${e.message}`);
+    }
+  }
+
+  if (successCount > 0) {
+    return { success: true, count: successCount, error: errors.length > 0 ? errors.join('; ') : undefined };
+  }
+
+  return { success: false, count: 0, error: errors.join('; ') || 'Failed to push classes to Supabase' };
+}
+
+export async function pullFromSupabase(): Promise<{ success: boolean; count: number; error?: string }> {
+  const config = getSupabaseConfig();
+  if (!config) {
+    return { success: false, count: 0, error: 'Supabase URL & API Key are not configured.' };
+  }
+
+  try {
+    const res = await fetch(`${config.url}/rest/v1/classes?select=*&order=start_at.asc`, {
+      headers: getSupabaseHeaders(config.key),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      return { success: false, count: 0, error: `Supabase returned HTTP ${res.status}: ${text}` };
+    }
+
+    const data = await res.json();
+    if (!Array.isArray(data)) {
+      return { success: false, count: 0, error: 'Invalid response format from Supabase' };
+    }
+
+    const validRows = data.filter((row: any) => !isDummyClass(row));
+    classesStore = validRows.map((row: any) => ({
+      id: String(row.id),
+      title: row.title,
+      subject: normalizeSubject(row.subject),
+      faculty: row.faculty || 'Faculty',
+      topic: row.topic || '',
+      description: row.description || '',
+      youtube_url: row.youtube_url,
+      youtube_id: row.youtube_id,
+      start_at: row.start_at,
+      duration_min: Number(row.duration_min),
+      is_embeddable: row.is_embeddable !== false,
+      thumbnail_url: row.thumbnail_url || (row.youtube_id ? `https://img.youtube.com/vi/${row.youtube_id}/hqdefault.jpg` : ''),
+      created_at: row.created_at || new Date().toISOString(),
+    }));
+
+    classesUpdatedAt = Date.now();
+    persistClasses();
+
+    return { success: true, count: classesStore.length };
+  } catch (err: any) {
+    return { success: false, count: 0, error: err.message };
+  }
+}
+
 export async function syncClasses(clientClasses: JEEClass[], clientUpdatedAt?: number): Promise<JEEClass[]> {
   if (!Array.isArray(clientClasses)) return getAllClasses();
 
-  // Strip all dummy classes immediately
-  const cleanList = clientClasses.filter((c) => !isDummyClass(c));
+  const cleanList = clientClasses
+    .filter((c) => !isDummyClass(c))
+    .map((c) => ({
+      ...c,
+      id: ensureValidUuid(c.id),
+      subject: normalizeSubject(c.subject),
+    }));
+
   classesStore = cleanList;
   classesUpdatedAt = typeof clientUpdatedAt === 'number' && clientUpdatedAt > 0 ? clientUpdatedAt : Date.now();
   persistClasses();
 
-  const config = getSupabaseConfig();
-  if (config) {
-    try {
-      if (cleanList.length === 0) {
-        await fetch(`${config.url}/rest/v1/classes?duration_min=gt.0`, {
-          method: 'DELETE',
-          headers: getSupabaseHeaders(config.key),
-        });
-      } else {
-        for (const cls of cleanList) {
-          if (!cls.title || !cls.youtube_url || !cls.start_at) continue;
-          const row: any = {
-            title: cls.title,
-            subject: normalizeSubject(cls.subject),
-            faculty: cls.faculty || 'Faculty',
-            topic: cls.topic || '',
-            description: cls.description || '',
-            youtube_url: cls.youtube_url,
-            youtube_id: cls.youtube_id,
-            start_at: cls.start_at,
-            duration_min: Number(cls.duration_min),
-            is_embeddable: cls.is_embeddable !== false,
-          };
-
-          if (cls.id && UUID_REGEX.test(cls.id)) {
-            row.id = cls.id;
-            await fetch(`${config.url}/rest/v1/classes`, {
-              method: 'POST',
-              headers: {
-                ...getSupabaseHeaders(config.key),
-                Prefer: 'resolution=merge-duplicates',
-              },
-              body: JSON.stringify(row),
-            });
-          } else {
-            const checkRes = await fetch(
-              `${config.url}/rest/v1/classes?start_at=eq.${encodeURIComponent(cls.start_at)}&select=id`,
-              { headers: getSupabaseHeaders(config.key) }
-            );
-            if (checkRes.ok) {
-              const existing = await checkRes.json();
-              if (!Array.isArray(existing) || existing.length === 0) {
-                await fetch(`${config.url}/rest/v1/classes`, {
-                  method: 'POST',
-                  headers: getSupabaseHeaders(config.key),
-                  body: JSON.stringify(row),
-                });
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Supabase syncClasses warning:', e);
-    }
-  }
+  // Background push to Supabase if available
+  pushBackupToSupabase().catch(() => {});
 
   return cleanList;
 }
 
+// -------------------------------------------------------------
+// Push Subscriptions
+// -------------------------------------------------------------
 export async function savePushSubscription(sub: PushSubscriptionData): Promise<void> {
-  if (supabaseConfig) {
+  const config = getSupabaseConfig();
+  if (config) {
     try {
-      await fetch(`${supabaseConfig.url}/rest/v1/push_subscriptions`, {
+      await fetch(`${config.url}/rest/v1/push_subscriptions`, {
         method: 'POST',
         headers: {
-          ...getSupabaseHeaders(supabaseConfig.key),
+          ...getSupabaseHeaders(config.key),
           Prefer: 'resolution=merge-duplicates',
         },
         body: JSON.stringify({
@@ -490,13 +814,21 @@ export async function savePushSubscription(sub: PushSubscriptionData): Promise<v
       });
     } catch (e) {}
   }
+
+  const existingIdx = subscriptionsStore.findIndex((s) => s.endpoint === sub.endpoint);
+  if (existingIdx !== -1) {
+    subscriptionsStore[existingIdx] = sub;
+  } else {
+    subscriptionsStore.push(sub);
+  }
 }
 
 export async function getPushSubscriptions(): Promise<PushSubscriptionData[]> {
-  if (supabaseConfig) {
+  const config = getSupabaseConfig();
+  if (config) {
     try {
-      const res = await fetch(`${supabaseConfig.url}/rest/v1/push_subscriptions?select=*`, {
-        headers: getSupabaseHeaders(supabaseConfig.key),
+      const res = await fetch(`${config.url}/rest/v1/push_subscriptions?select=*`, {
+        headers: getSupabaseHeaders(config.key),
       });
       if (res.ok) {
         const data = await res.json();
@@ -513,8 +845,12 @@ export async function getPushSubscriptions(): Promise<PushSubscriptionData[]> {
       }
     } catch (e) {}
   }
-  return [];
+  return subscriptionsStore;
 }
+
+// -------------------------------------------------------------
+// Bookmarks, Study Hours, Attendance (Local JSON Persistence)
+// -------------------------------------------------------------
 
 export interface ServerBookmark {
   id: string;

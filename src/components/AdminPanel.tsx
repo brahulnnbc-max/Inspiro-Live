@@ -18,6 +18,15 @@ import {
   RotateCcw,
   Download,
   Upload,
+  Database,
+  Server,
+  Cloud,
+  CloudOff,
+  HardDrive,
+  Key,
+  Check,
+  Info,
+  ShieldCheck,
 } from 'lucide-react';
 import { JEEClass, JEEClassSubject } from '../types/class';
 import { extractYouTubeId, verifyYouTubeEmbeddability } from '../lib/youtube';
@@ -46,8 +55,144 @@ export const AdminPanel: React.FC<Props> = ({
   const [authError, setAuthError] = useState('');
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
 
-  // Form Mode: Single vs Bulk Add
-  const [addMode, setAddMode] = useState<'single' | 'bulk'>('single');
+  // Form Mode: Single vs Bulk Add vs Database Center
+  const [addMode, setAddMode] = useState<'single' | 'bulk' | 'database'>('single');
+
+  // Dual Storage & Supabase Management States
+  const [storageStatus, setStorageStatus] = useState<any | null>(null);
+  const [isLoadingStorageStatus, setIsLoadingStorageStatus] = useState(false);
+  const [isTestingDb, setIsTestingDb] = useState(false);
+  const [isSyncingToSupabase, setIsSyncingToSupabase] = useState(false);
+  const [isPullingFromSupabase, setIsPullingFromSupabase] = useState(false);
+  const [inputSupabaseUrl, setInputSupabaseUrl] = useState('');
+  const [inputSupabaseKey, setInputSupabaseKey] = useState('');
+  const [configSaveStatus, setConfigSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [showSqlSchema, setShowSqlSchema] = useState(false);
+
+  // Fetch Database & Storage Health
+  const fetchStorageStatus = async () => {
+    setIsLoadingStorageStatus(true);
+    try {
+      const res = await fetch('/api/database/status');
+      if (res.ok) {
+        const data = await res.json();
+        setStorageStatus(data);
+        if (data.primary?.url && !inputSupabaseUrl) {
+          setInputSupabaseUrl(data.primary.url);
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch storage status:', err);
+    } finally {
+      setIsLoadingStorageStatus(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchStorageStatus();
+    }
+  }, [isAuthenticated]);
+
+  const handleTestConnection = async () => {
+    setIsTestingDb(true);
+    try {
+      const res = await fetch('/api/database/test', { method: 'POST' });
+      const data = await res.json();
+      await fetchStorageStatus();
+      setFormStatus({
+        type: data.connected ? 'success' : 'error',
+        message: data.message,
+      });
+    } catch (err: any) {
+      setFormStatus({ type: 'error', message: `Test failed: ${err.message}` });
+    } finally {
+      setIsTestingDb(false);
+    }
+  };
+
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputSupabaseUrl || !inputSupabaseKey) {
+      setConfigSaveStatus({ type: 'error', message: 'Please enter both Supabase Project URL and API Key.' });
+      return;
+    }
+    setIsTestingDb(true);
+    setConfigSaveStatus(null);
+    try {
+      const res = await fetch('/api/database/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supabaseUrl: inputSupabaseUrl, supabaseKey: inputSupabaseKey }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchStorageStatus();
+        setConfigSaveStatus({
+          type: data.health?.connected ? 'success' : 'error',
+          message: data.health?.connected
+            ? 'Supabase credentials saved and verified! Both Supabase and Server Backup are active.'
+            : `Saved to .env: ${data.health?.message}`,
+        });
+      } else {
+        setConfigSaveStatus({ type: 'error', message: data.error || 'Failed to save configuration' });
+      }
+    } catch (err: any) {
+      setConfigSaveStatus({ type: 'error', message: err.message || 'Failed to save configuration' });
+    } finally {
+      setIsTestingDb(false);
+    }
+  };
+
+  const handlePushBackupToSupabase = async () => {
+    setIsSyncingToSupabase(true);
+    try {
+      const res = await fetch('/api/database/push-to-supabase', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setFormStatus({
+          type: 'success',
+          message: `Successfully uploaded ${data.count} classes from Server Backup to Supabase!`,
+        });
+        await fetchStorageStatus();
+        await onRefreshClasses();
+      } else {
+        setFormStatus({
+          type: 'error',
+          message: `Push to Supabase failed: ${data.error}`,
+        });
+      }
+    } catch (err: any) {
+      setFormStatus({ type: 'error', message: err.message });
+    } finally {
+      setIsSyncingToSupabase(false);
+    }
+  };
+
+  const handlePullFromSupabase = async () => {
+    setIsPullingFromSupabase(true);
+    try {
+      const res = await fetch('/api/database/pull-from-supabase', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setFormStatus({
+          type: 'success',
+          message: `Successfully downloaded ${data.count} classes from Supabase into Server Backup!`,
+        });
+        await fetchStorageStatus();
+        await onRefreshClasses();
+      } else {
+        setFormStatus({
+          type: 'error',
+          message: `Pull from Supabase failed: ${data.error}`,
+        });
+      }
+    } catch (err: any) {
+      setFormStatus({ type: 'error', message: err.message });
+    } finally {
+      setIsPullingFromSupabase(false);
+    }
+  };
 
   // Single Class Form State
   const [title, setTitle] = useState('');
@@ -592,7 +737,140 @@ export const AdminPanel: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Mode Switch: Single Class vs Bulk Add */}
+      {/* Dual Storage Engine Status Card */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-sky-950/60 border border-sky-800/60 rounded-xl text-sky-400">
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-white">Dual Storage Engine Status</h3>
+                <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                  Active: {storageStatus?.activeEngine === 'supabase' ? 'Supabase Cloud (Primary)' : 'Server Backup (Failover)'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                Primary Supabase PostgreSQL + Local Server Persistent Backup. Changes apply to all users even during Supabase free trial sleep.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleTestConnection}
+              disabled={isTestingDb}
+              className="px-3 py-1.5 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg transition-colors flex items-center gap-1.5 border border-slate-700 shadow-sm"
+              title="Test connection to Supabase"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isTestingDb ? 'animate-spin' : ''}`} />
+              <span>Test Ping</span>
+            </button>
+
+            <button
+              onClick={handlePushBackupToSupabase}
+              disabled={isSyncingToSupabase || !storageStatus?.primary?.configured}
+              className="px-3 py-1.5 text-xs font-semibold text-emerald-300 bg-emerald-950/50 hover:bg-emerald-900/60 border border-emerald-800/80 disabled:opacity-40 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+              title="Upload all classes in Server Backup to Supabase"
+            >
+              <Cloud className={`w-3.5 h-3.5 ${isSyncingToSupabase ? 'animate-pulse' : ''}`} />
+              <span>Push to Supabase</span>
+            </button>
+
+            <button
+              onClick={() => setAddMode('database')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 border ${
+                addMode === 'database'
+                  ? 'bg-sky-500 text-slate-950 border-sky-400'
+                  : 'bg-sky-950/40 text-sky-300 border-sky-800/80 hover:bg-sky-900/50'
+              }`}
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span>Configure Database</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Status Indicators Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80 text-xs">
+          {/* Primary: Supabase */}
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+                <Cloud className="w-4 h-4 text-sky-400" />
+                <span>Primary Cloud DB (Supabase)</span>
+              </span>
+
+              {storageStatus?.primary?.status === 'connected' && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Connected
+                </span>
+              )}
+              {storageStatus?.primary?.status === 'paused' && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950 text-amber-300 border border-amber-800 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                  Paused (Serving from Backup)
+                </span>
+              )}
+              {storageStatus?.primary?.status === 'auth_error' && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800">
+                  Key / Auth Error
+                </span>
+              )}
+              {storageStatus?.primary?.status === 'table_missing' && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950 text-amber-300 border border-amber-800">
+                  Table Missing (Run SQL)
+                </span>
+              )}
+              {storageStatus?.primary?.status === 'unreachable' && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800">
+                  Unreachable
+                </span>
+              )}
+              {(!storageStatus || storageStatus?.primary?.status === 'not_configured') && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                  Not Configured
+                </span>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-400">
+              {storageStatus?.primary?.message || 'Checking connection status...'}
+            </p>
+
+            {storageStatus?.primary?.url && (
+              <p className="text-[10px] font-mono text-sky-400/90 truncate">
+                {storageStatus.primary.url}
+              </p>
+            )}
+          </div>
+
+          {/* Secondary: Server-Side Backup */}
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+                <HardDrive className="w-4 h-4 text-emerald-400" />
+                <span>Secondary Storage (Server Backup)</span>
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                Active & Failover Ready
+              </span>
+            </div>
+
+            <p className="text-[11px] text-slate-400">
+              {storageStatus?.backup?.classesCount ?? classes.length} classes safely preserved on disk ({storageStatus?.backup?.classesFilePath || 'data/classes.json'}).
+            </p>
+            <p className="text-[10px] text-emerald-400/90">
+              Guaranteed delivery: If Supabase goes to sleep, students seamlessly receive the schedule from here.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Mode Switch: Single Class vs Bulk Add vs Database Center */}
       <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
         <button
           onClick={() => setAddMode('single')}
@@ -613,6 +891,17 @@ export const AdminPanel: React.FC<Props> = ({
           }`}
         >
           Bulk Schedule Multiple Links
+        </button>
+        <button
+          onClick={() => setAddMode('database')}
+          className={`px-4 py-2 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+            addMode === 'database'
+              ? 'bg-sky-500 text-slate-950 shadow'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Database className="w-3.5 h-3.5" />
+          <span>Storage & Supabase Center</span>
         </button>
       </div>
 
@@ -1050,6 +1339,229 @@ export const AdminPanel: React.FC<Props> = ({
             </button>
           </div>
         </form>
+      )}
+
+      {/* DUAL STORAGE & DATABASE MANAGEMENT CENTER */}
+      {addMode === 'database' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <div className="space-y-1">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <Database className="w-5 h-5 text-sky-400" />
+                <span>Dual Storage & Database Engine Center</span>
+              </h2>
+              <p className="text-xs text-slate-400">
+                Primary Supabase PostgreSQL Cloud + Secondary Local Server Disk Backup. Fully resilient against free-tier auto-pause.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleTestConnection}
+                disabled={isTestingDb}
+                className="px-3.5 py-2 text-xs font-semibold bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-lg transition-colors flex items-center gap-1.5 shadow"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isTestingDb ? 'animate-spin' : ''}`} />
+                <span>Test Connection Now</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Explanation Banner */}
+          <div className="p-4 bg-sky-950/30 border border-sky-800/60 rounded-xl text-xs space-y-2 text-sky-200">
+            <div className="font-semibold text-white flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-sky-400" />
+              <span>How your dual-storage architecture protects you:</span>
+            </div>
+            <ul className="list-disc pl-5 space-y-1 text-slate-300">
+              <li>
+                <strong className="text-sky-300">Supabase Cloud (Primary):</strong> Stores your scheduled classes in a cloud PostgreSQL database accessible across devices and sessions.
+              </li>
+              <li>
+                <strong className="text-emerald-300">Server Backup (Failover & Persistence):</strong> Every class you schedule is simultaneously backed up locally on disk (<code className="font-mono text-emerald-400">data/classes.json</code>).
+              </li>
+              <li>
+                <strong className="text-amber-300">Automatic Free-Tier Pause Defense:</strong> When a free-tier Supabase project pauses due to 7-day inactivity, the app <em>automatically</em> detects the pause and serves all classes from the Server Backup. When you click apply or schedule new classes, they are saved locally and seen by all students.
+              </li>
+            </ul>
+          </div>
+
+          {/* Supabase Connection Setup Form */}
+          <form onSubmit={handleSaveConfig} className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <Key className="w-4 h-4 text-amber-400" />
+                <span>Configure Supabase Credentials</span>
+              </h3>
+              <span className="text-[11px] text-slate-400">Saved to <code className="font-mono text-sky-300">.env</code></span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-slate-300">
+                  Supabase Project URL <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="https://yourprojectid.supabase.co"
+                  value={inputSupabaseUrl}
+                  onChange={(e) => setInputSupabaseUrl(e.target.value)}
+                  className="w-full px-3.5 py-2 text-xs bg-slate-900 border border-slate-800 rounded-lg text-white font-mono placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+                <p className="text-[10px] text-slate-500">
+                  Found in your Supabase Dashboard &gt; Project Settings &gt; API &gt; Project URL.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-slate-300">
+                  Supabase API Key (Anon or Service Role) <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  value={inputSupabaseKey}
+                  onChange={(e) => setInputSupabaseKey(e.target.value)}
+                  className="w-full px-3.5 py-2 text-xs bg-slate-900 border border-slate-800 rounded-lg text-white font-mono placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+                <p className="text-[10px] text-slate-500">
+                  Found in your Supabase Dashboard &gt; Project Settings &gt; API &gt; Project API keys (anon public or service_role).
+                </p>
+              </div>
+            </div>
+
+            {configSaveStatus && (
+              <div
+                className={`p-3 rounded-lg text-xs flex items-center gap-2 ${
+                  configSaveStatus.type === 'success'
+                    ? 'bg-emerald-950/60 border border-emerald-800 text-emerald-300'
+                    : 'bg-rose-950/60 border border-rose-800 text-rose-300'
+                }`}
+              >
+                {configSaveStatus.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                )}
+                <span>{configSaveStatus.message}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2">
+              <button
+                type="submit"
+                disabled={isTestingDb}
+                className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow"
+              >
+                {isTestingDb ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Verifying & Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save & Test Supabase Connection</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowSqlSchema(!showSqlSchema)}
+                className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1"
+              >
+                <Info className="w-3.5 h-3.5" />
+                <span>{showSqlSchema ? 'Hide Database Schema' : 'View SQL Table Setup'}</span>
+              </button>
+            </div>
+          </form>
+
+          {/* SQL Setup Helper */}
+          {showSqlSchema && (
+            <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3 animate-in fade-in">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-200">PostgreSQL Schema (supabase/schema.sql)</span>
+                <span className="text-[10px] text-slate-400">Run this in Supabase SQL Editor if tables do not exist</span>
+              </div>
+              <pre className="p-3 bg-slate-900 rounded-lg text-[11px] font-mono text-emerald-300 overflow-x-auto max-h-48 border border-slate-800">
+{`CREATE TABLE IF NOT EXISTS public.classes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title TEXT NOT NULL,
+    subject TEXT NOT NULL CHECK (subject IN ('Physics', 'Chemistry', 'Mathematics')),
+    faculty TEXT DEFAULT 'Faculty',
+    topic TEXT,
+    description TEXT,
+    youtube_url TEXT NOT NULL,
+    youtube_id TEXT NOT NULL,
+    start_at TIMESTAMPTZ NOT NULL,
+    duration_min INTEGER NOT NULL CHECK (duration_min > 0),
+    is_embeddable BOOLEAN NOT NULL DEFAULT true,
+    thumbnail_url TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+ALTER TABLE public.classes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public full access" ON public.classes FOR ALL USING (true) WITH CHECK (true);`}
+              </pre>
+            </div>
+          )}
+
+          {/* Two-Way Synchronization Controls */}
+          <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-5 space-y-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-sky-400" />
+              <span>Bi-Directional Sync Controls</span>
+            </h3>
+            <p className="text-xs text-slate-400">
+              Transfer classes between your local persistent disk backup and your cloud Supabase database on demand.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-200">Push Local Backup &rarr; Supabase</span>
+                  <span className="text-[10px] font-mono text-emerald-400">{classes.length} classes ready</span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Uploads all currently scheduled classes in Server Backup to your Supabase PostgreSQL database. Useful after creating classes offline or unpausing Supabase.
+                </p>
+                <button
+                  type="button"
+                  onClick={handlePushBackupToSupabase}
+                  disabled={isSyncingToSupabase || !storageStatus?.primary?.configured}
+                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-semibold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <Cloud className={`w-3.5 h-3.5 ${isSyncingToSupabase ? 'animate-pulse' : ''}`} />
+                  <span>{isSyncingToSupabase ? 'Pushing to Supabase...' : 'Push All to Supabase'}</span>
+                </button>
+              </div>
+
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-200">Pull Supabase &rarr; Local Backup</span>
+                  <span className="text-[10px] font-mono text-sky-400">
+                    {storageStatus?.primary?.rowCount !== undefined ? `${storageStatus.primary.rowCount} in Supabase` : 'Cloud pull'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Downloads all classes from Supabase and overwrites your Server Backup so both layers are identical.
+                </p>
+                <button
+                  type="button"
+                  onClick={handlePullFromSupabase}
+                  disabled={isPullingFromSupabase || !storageStatus?.primary?.configured}
+                  className="w-full py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white font-semibold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <Download className={`w-3.5 h-3.5 ${isPullingFromSupabase ? 'animate-pulse' : ''}`} />
+                  <span>{isPullingFromSupabase ? 'Pulling from Supabase...' : 'Pull All from Supabase'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* SCHEDULED CLASSES MANAGEMENT TABLE */}

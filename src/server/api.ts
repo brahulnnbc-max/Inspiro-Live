@@ -21,11 +21,66 @@ import {
   getServerAttendance,
   saveServerAttendance,
   syncClasses,
+  getOverallStorageStatus,
+  testSupabaseConnection,
+  updateSupabaseConfig,
+  pushBackupToSupabase,
+  pullFromSupabase,
 } from './db.ts';
 import { extractYouTubeId, verifyYouTubeEmbeddability } from '../lib/youtube.ts';
 import { checkScheduleOverlap } from '../lib/overlap.ts';
 
 export const apiRouter = Router();
+
+// Storage diagnostics and Supabase health checks
+apiRouter.get('/database/status', async (_req: Request, res: Response) => {
+  try {
+    const status = await getOverallStorageStatus();
+    res.json(status);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/database/test', async (_req: Request, res: Response) => {
+  try {
+    const health = await testSupabaseConnection(true);
+    res.json(health);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/database/config', async (req: Request, res: Response) => {
+  try {
+    const { supabaseUrl, supabaseKey } = req.body;
+    if (!supabaseUrl || !supabaseKey) {
+      return res.status(400).json({ error: 'Both supabaseUrl and supabaseKey are required' });
+    }
+    const health = await updateSupabaseConfig(supabaseUrl, supabaseKey);
+    res.json({ success: true, health });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/database/push-to-supabase', async (_req: Request, res: Response) => {
+  try {
+    const result = await pushBackupToSupabase();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/database/pull-from-supabase', async (_req: Request, res: Response) => {
+  try {
+    const result = await pullFromSupabase();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';

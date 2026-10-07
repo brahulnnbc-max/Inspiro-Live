@@ -134,13 +134,12 @@ export function setLocalClasses(classes: JEEClass[], updatedAt: number = Date.no
 
 /**
  * Universal Class Fetcher:
- * Guaranteed permanent schedule persistence across Vercel serverless cold starts.
- * The client device maintains an authoritative timestamped schedule that self-heals
- * serverless lambda instances whenever they cycle or cold-start.
+ * Queries the authoritative server timetable (backed by Supabase Primary + Server Disk Backup).
+ * Automatically updates localStorage for offline caching without allowing stale client
+ * local storage to override or corrupt the server schedule.
  */
 export async function fetchAllClasses(): Promise<JEEClass[]> {
   const local = getLocalClasses();
-  const localUpdatedAt = getLocalUpdatedAt();
 
   try {
     const res = await fetch(`/api/classes?_t=${Date.now()}`, {
@@ -156,62 +155,18 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
       const data = await res.json();
       if (Array.isArray(data.classes)) {
         const cleanServer: JEEClass[] = data.classes.filter((c: any) => !isDummyClass(c));
-        const serverUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : 0;
+        const serverUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : Date.now();
 
-        // CASE 1: Local has classes, and local was modified at or after server
-        if (local.length > 0 && localUpdatedAt >= serverUpdatedAt) {
-          const serverIds = new Set(cleanServer.map((c) => c.id));
-          const localIds = new Set(local.map((c) => c.id));
-          const isIdentical =
-            serverIds.size === localIds.size &&
-            [...localIds].every((id) => serverIds.has(id));
-
-          // If serverless container is cold or out of sync, heal it immediately
-          if (!isIdentical) {
-            fetch('/api/classes/sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
-              body: JSON.stringify({ classes: local, updatedAt: localUpdatedAt }),
-            }).catch(() => {});
-          }
-
-          return local;
-        }
-
-        // CASE 2: Local was explicitly cleared by user (local is [] and localUpdatedAt > 0)
-        if (local.length === 0 && localUpdatedAt > 0 && localUpdatedAt >= serverUpdatedAt) {
-          if (cleanServer.length > 0) {
-            fetch('/api/classes/sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
-              body: JSON.stringify({ classes: [], updatedAt: localUpdatedAt }),
-            }).catch(() => {});
-          }
-          return [];
-        }
-
-        // CASE 3: Server has newer updates (e.g. published from another device)
-        if (cleanServer.length > 0 && serverUpdatedAt > localUpdatedAt) {
-          setLocalClasses(cleanServer, serverUpdatedAt);
-          return cleanServer;
-        }
-
-        // CASE 4: Fresh visitor with no prior local history (local is [] and localUpdatedAt === 0)
-        if (local.length === 0 && localUpdatedAt === 0) {
-          if (cleanServer.length > 0) {
-            setLocalClasses(cleanServer, serverUpdatedAt || Date.now());
-          }
-          return cleanServer;
-        }
-
-        if (local.length > 0) return local;
+        // Always update local storage with authoritative server timetable
+        setLocalClasses(cleanServer, serverUpdatedAt);
         return cleanServer;
       }
     }
   } catch (err) {
-    // Network / static host fallback: local storage is 100% authoritative
+    console.warn('Network offline or server unreachable, fallback to cached timetable:', err);
   }
 
+  // Fallback to local offline cache only when network or server is unreachable
   return local;
 }
 
@@ -224,7 +179,7 @@ export function exportScheduleBackup(): string {
 }
 
 /**
- * Import and restore timetable from JSON string
+ * Import and restore timetable from JSON string (Admin only)
  */
 export async function importScheduleBackup(jsonStr: string): Promise<{ success: boolean; count: number; error?: string }> {
   try {
@@ -252,25 +207,31 @@ export async function importScheduleBackup(jsonStr: string): Promise<{ success: 
 }
 
 /**
+ * Generate standard RFC4122 v4 UUID
+ */
+function generateUuid(): string {
+  if (typeof window !== 'undefined' && window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/**
  * Save new class
  */
 export async function saveNewClass(
   newClass: Omit<JEEClass, 'id' | 'created_at'> & { id?: string }
 ): Promise<JEEClass> {
-  const localId = newClass.id || `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-  const created: JEEClass = {
+  const targetId = newClass.id || generateUuid();
+  const payload = {
     ...newClass,
-    id: localId,
-    created_at: new Date().toISOString(),
+    id: targetId,
   };
 
-  // 1. Immediately store in localStorage so it appears without latency
-  const current = getLocalClasses();
-  const updated = [...current.filter((c) => c.id !== localId), created];
-  const now = Date.now();
-  setLocalClasses(updated, now);
-
-  // 2. Persist to server / Vercel API
   try {
     const res = await fetch('/api/classes', {
       method: 'POST',
@@ -278,35 +239,33 @@ export async function saveNewClass(
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache, no-store',
       },
-      body: JSON.stringify(created),
+      body: JSON.stringify(payload),
     });
 
     if (res.ok) {
       const data = await res.json();
-      if (data.class) {
-        const synced = [...updated.filter((c) => c.id !== localId && c.id !== data.class.id), data.class];
-        setLocalClasses(synced, now);
-        // Sync full schedule to serverless containers
-        fetch('/api/classes/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
-          body: JSON.stringify({ classes: synced, updatedAt: now }),
-        }).catch(() => {});
-        return data.class;
-      }
+      const saved = data.class || payload;
+      const current = getLocalClasses();
+      const updated = [...current.filter((c) => c.id !== saved.id && c.id !== targetId), saved];
+      setLocalClasses(updated, Date.now());
+      return saved;
+    } else {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || err.error || `Server returned HTTP ${res.status}`);
     }
-  } catch (err) {
-    // Local persistence guarantees zero data loss
+  } catch (err: any) {
+    // If server offline, preserve in localStorage backup
+    console.warn('Server offline during saveNewClass, storing locally:', err);
+    const fallbackClass: JEEClass = {
+      ...newClass,
+      id: targetId,
+      created_at: new Date().toISOString(),
+    };
+    const current = getLocalClasses();
+    const updated = [...current.filter((c) => c.id !== targetId), fallbackClass];
+    setLocalClasses(updated, Date.now());
+    return fallbackClass;
   }
-
-  // Backup sync
-  fetch('/api/classes/sync', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
-    body: JSON.stringify({ classes: updated, updatedAt: now }),
-  }).catch(() => {});
-
-  return created;
 }
 
 /**
@@ -318,19 +277,10 @@ export async function updateClassInStore(
 ): Promise<JEEClass | null> {
   const current = getLocalClasses();
   const index = current.findIndex((c) => c.id === id);
-  if (index === -1) return null;
-
-  const updatedClass: JEEClass = {
-    ...current[index],
-    ...updates,
-  };
-  const updatedList = [...current];
-  updatedList[index] = updatedClass;
-  const now = Date.now();
-  setLocalClasses(updatedList, now);
+  const updatedLocal = index !== -1 ? { ...current[index], ...updates } : null;
 
   try {
-    await fetch(`/api/classes/${id}`, {
+    const res = await fetch(`/api/classes/${id}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -338,41 +288,45 @@ export async function updateClassInStore(
       },
       body: JSON.stringify(updates),
     });
-  } catch (e) {}
 
-  fetch('/api/classes/sync', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
-    body: JSON.stringify({ classes: updatedList, updatedAt: now }),
-  }).catch(() => {});
+    if (res.ok) {
+      const data = await res.json();
+      const saved = data.class || updatedLocal;
+      if (saved) {
+        const list = current.map((c) => (c.id === id ? saved : c));
+        setLocalClasses(list, Date.now());
+        return saved;
+      }
+    }
+  } catch (e) {
+    console.warn('Server offline during updateClassInStore, updating local cache:', e);
+  }
 
-  return updatedClass;
+  if (updatedLocal) {
+    const list = current.map((c) => (c.id === id ? updatedLocal : c));
+    setLocalClasses(list, Date.now());
+    return updatedLocal;
+  }
+
+  return null;
 }
 
 /**
  * Delete class
  */
 export async function removeClass(id: string): Promise<boolean> {
-  const current = getLocalClasses();
-  const updated = current.filter((c) => c.id !== id);
-  const now = Date.now();
-  setLocalClasses(updated, now);
-
   try {
     await fetch(`/api/classes/${id}`, {
       method: 'DELETE',
       headers: { 'Cache-Control': 'no-cache, no-store' },
     });
   } catch (err) {
-    // Continue with local delete
+    console.warn('Server offline during removeClass, deleting locally:', err);
   }
 
-  fetch('/api/classes/sync', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
-    body: JSON.stringify({ classes: updated, updatedAt: now }),
-  }).catch(() => {});
-
+  const current = getLocalClasses();
+  const updated = current.filter((c) => c.id !== id);
+  setLocalClasses(updated, Date.now());
   return true;
 }
 
@@ -380,22 +334,16 @@ export async function removeClass(id: string): Promise<boolean> {
  * Clear all classes (empty timetable)
  */
 export async function clearAllClassesFromStore(): Promise<boolean> {
-  const now = Date.now();
-  setLocalClasses([], now);
-
   try {
     await fetch('/api/classes/clear', {
       method: 'POST',
       headers: { 'Cache-Control': 'no-cache, no-store' },
     });
-  } catch (err) {}
+  } catch (err) {
+    console.warn('Server offline during clearAllClassesFromStore:', err);
+  }
 
-  fetch('/api/classes/sync', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
-    body: JSON.stringify({ classes: [], updatedAt: now }),
-  }).catch(() => {});
-
+  setLocalClasses([], Date.now());
   return true;
 }
 
