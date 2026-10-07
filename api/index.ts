@@ -5,6 +5,7 @@ import { apiRouter } from '../src/server/api.ts';
 dotenv.config();
 
 const app = express();
+app.set('etag', false);
 app.use(express.json());
 
 // Health checks

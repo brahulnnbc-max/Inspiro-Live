@@ -9,32 +9,14 @@ import { MomentsTable } from './components/MomentsTable';
 import { getLiveClockStatus } from './lib/istTime';
 import { subscribeToPushNotifications, sendTestNotification } from './lib/pushClient';
 import { InspiroLogo } from './components/InspiroLogo';
-import { fetchAllClasses, isDummyClass } from './lib/clientData';
+import { fetchAllClasses, getLocalClasses, isDummyClass } from './lib/clientData';
 import { checkClassroomNotifications, InAppAlertPayload } from './lib/notificationMonitor';
 import { X, Play, Clock } from 'lucide-react';
 import { AppView } from './components/Navbar';
 
 export default function App() {
   const [classes, setClasses] = useState<JEEClass[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const raw =
-          localStorage.getItem('inspiro_jee_classes_v2') ||
-          localStorage.getItem('inspiro_jee_classes_backup_v2');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            const clean = parsed.filter((c: any) => !isDummyClass(c));
-            if (clean.length !== parsed.length) {
-              localStorage.setItem('inspiro_jee_classes_v2', JSON.stringify(clean));
-              localStorage.setItem('inspiro_jee_classes_backup_v2', JSON.stringify(clean));
-            }
-            return clean;
-          }
-        }
-      } catch {}
-    }
-    return [];
+    return getLocalClasses();
   });
   const [loading, setLoading] = useState(false);
   const [selectedClass, setSelectedClass] = useState<JEEClass | null>(null);
@@ -43,6 +25,17 @@ export default function App() {
   const [isFormulaModalOpen, setIsFormulaModalOpen] = useState(false);
   const [hasNotifications, setHasNotifications] = useState(false);
   const [activeAlert, setActiveAlert] = useState<InAppAlertPayload | null>(null);
+
+  // Sync state whenever classes are modified anywhere in the app
+  useEffect(() => {
+    const handleClassesUpdated = (e: any) => {
+      if (e.detail && Array.isArray(e.detail)) {
+        setClasses(e.detail);
+      }
+    };
+    window.addEventListener('inspiro_classes_updated', handleClassesUpdated);
+    return () => window.removeEventListener('inspiro_classes_updated', handleClassesUpdated);
+  }, []);
 
   // Check if browser notifications are already granted
   useEffect(() => {

@@ -24,7 +24,7 @@ import { extractYouTubeId, verifyYouTubeEmbeddability } from '../lib/youtube';
 import { checkScheduleOverlap } from '../lib/overlap';
 import { formatISTDateTime, formatISTTime } from '../lib/istTime';
 import { sendTestNotification } from '../lib/pushClient';
-import { saveNewClass, removeClass, resetAllClasses, fetchAllClasses, clearAllClassesFromStore, markScheduleCustomized, exportScheduleBackup, importScheduleBackup } from '../lib/clientData';
+import { saveNewClass, updateClassInStore, removeClass, resetAllClasses, fetchAllClasses, clearAllClassesFromStore, markScheduleCustomized, exportScheduleBackup, importScheduleBackup } from '../lib/clientData';
 import { InspiroLogo } from './InspiroLogo';
 
 interface Props {
@@ -349,17 +349,7 @@ export const AdminPanel: React.FC<Props> = ({
     if (!editingClass) return;
 
     try {
-      await fetch(`/api/classes/${editingClass.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingClass),
-      });
-
-      const current = await fetchAllClasses();
-      const updated = current.map(c => c.id === editingClass.id ? editingClass : c);
-      localStorage.setItem('inspiro_jee_classes_v2', JSON.stringify(updated));
-      localStorage.setItem('inspiro_jee_classes_backup_v2', JSON.stringify(updated));
-      markScheduleCustomized();
+      await updateClassInStore(editingClass.id, editingClass);
 
       setEditingClass(null);
       setFormStatus({

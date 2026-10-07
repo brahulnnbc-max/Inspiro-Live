@@ -12,25 +12,29 @@ export const DUMMY_CLASS_IDS = new Set([
   'class-chem-coordination',
 ]);
 
+const DUMMY_FACULTY = new Set([
+  'Er. R. Sharma (Ex-IIT Delhi)',
+  'Prof. A. N. Murthy (IIT Madras Alumni)',
+  'Dr. Neha Agarwal (Ph.D. Chemistry)',
+]);
+
 export function isDummyClass(cls: any): boolean {
   if (!cls) return true;
   if (cls.id && DUMMY_CLASS_IDS.has(cls.id)) return true;
-  const title = (cls.title || '').trim().toLowerCase();
-  if (
-    title.includes('rotational motion') ||
-    title.includes('electrostatics') ||
-    title.includes('definite integration') ||
-    title.includes('coordination chemistry')
-  ) {
-    return true;
-  }
+  if (cls.faculty && DUMMY_FACULTY.has(cls.faculty)) return true;
   return false;
 }
 
-const STORAGE_KEY = 'inspiro_jee_classes_v2';
-const BACKUP_KEY = 'inspiro_jee_classes_backup_v2';
-const DELETED_KEY = 'inspiro_jee_deleted_ids_v2';
-const USER_SCHEDULE_FLAG = 'inspiro_schedule_customized_v2';
+const STORAGE_KEY = 'inspiro_jee_classes_v3';
+const UPDATED_AT_KEY = 'inspiro_jee_classes_updated_at_v3';
+const USER_SCHEDULE_FLAG = 'inspiro_schedule_customized_v3';
+
+const LEGACY_STORAGE_KEYS = [
+  'inspiro_jee_classes_v2',
+  'inspiro_jee_classes_backup_v2',
+  'inspiro_jee_classes',
+  'inspiro_classes',
+];
 
 export function isScheduleCustomized(): boolean {
   if (typeof window === 'undefined') return false;
@@ -42,77 +46,87 @@ export function markScheduleCustomized(): void {
   localStorage.setItem(USER_SCHEDULE_FLAG, 'true');
 }
 
-// Deleted classes tombstone set (prevents cold-started serverless instances from resurrecting deleted defaults)
-function getDeletedClassIds(): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  try {
-    const raw = localStorage.getItem(DELETED_KEY);
-    if (raw) {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) return new Set(arr);
-    }
-  } catch {}
-  return new Set();
-}
-
-function addDeletedClassId(id: string) {
-  if (typeof window === 'undefined') return;
-  try {
-    const set = getDeletedClassIds();
-    set.add(id);
-    localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(set)));
-  } catch {}
-}
-
-function clearDeletedClassId(id: string) {
-  if (typeof window === 'undefined') return;
-  try {
-    const set = getDeletedClassIds();
-    set.delete(id);
-    localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(set)));
-  } catch {}
-}
-
-// Safe localStorage access with automatic dummy-class purging
-function getLocalClasses(): JEEClass[] | null {
+/**
+ * Migrate older storage keys cleanly into v3, stripping legacy dummy classes.
+ */
+function migrateLegacyStorage(): JEEClass[] | null {
   if (typeof window === 'undefined') return null;
+
+  // 1. If v3 already exists, use it
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw !== null) {
-      const parsed = JSON.parse(raw);
+    const v3Raw = localStorage.getItem(STORAGE_KEY);
+    if (v3Raw !== null) {
+      const parsed = JSON.parse(v3Raw);
       if (Array.isArray(parsed)) {
-        const cleaned = parsed.filter((c) => !isDummyClass(c));
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
-        localStorage.setItem(BACKUP_KEY, JSON.stringify(cleaned));
-        return cleaned;
+        return parsed.filter((c) => !isDummyClass(c));
       }
     }
-  } catch (e) {
-    console.warn('localStorage read error:', e);
+  } catch {}
+
+  // 2. Search legacy storage keys
+  for (const key of LEGACY_STORAGE_KEYS) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const clean = parsed.filter((c) => !isDummyClass(c));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
+          localStorage.setItem(UPDATED_AT_KEY, String(Date.now()));
+          markScheduleCustomized();
+
+          // Wipe legacy keys so old dummy classes cannot be resurrected
+          for (const k of LEGACY_STORAGE_KEYS) {
+            try {
+              localStorage.removeItem(k);
+            } catch {}
+          }
+          return clean;
+        }
+      }
+    } catch {}
   }
+
   return null;
 }
 
-function getBackupClasses(): JEEClass[] {
+export function getLocalClasses(): JEEClass[] {
   if (typeof window === 'undefined') return [];
+  const migrated = migrateLegacyStorage();
+  if (migrated !== null) return migrated;
+
   try {
-    const raw = localStorage.getItem(BACKUP_KEY);
-    if (raw !== null) {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         return parsed.filter((c) => !isDummyClass(c));
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn('localStorage read error:', e);
+  }
   return [];
 }
 
-function setLocalClasses(classes: JEEClass[]): void {
+export function getLocalUpdatedAt(): number {
+  if (typeof window === 'undefined') return 0;
+  try {
+    const raw = localStorage.getItem(UPDATED_AT_KEY);
+    return raw ? Number(raw) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function setLocalClasses(classes: JEEClass[], updatedAt: number = Date.now()): void {
   if (typeof window === 'undefined') return;
   try {
     const clean = classes.filter((c) => !isDummyClass(c));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
-    localStorage.setItem(BACKUP_KEY, JSON.stringify(clean));
+    localStorage.setItem(UPDATED_AT_KEY, String(updatedAt));
+    markScheduleCustomized();
+    window.dispatchEvent(new CustomEvent('inspiro_classes_updated', { detail: clean }));
   } catch (e) {
     console.warn('localStorage write error:', e);
   }
@@ -120,15 +134,13 @@ function setLocalClasses(classes: JEEClass[]): void {
 
 /**
  * Universal Class Fetcher:
- * Guaranteed permanent schedule persistence.
- * If the user on this browser has customized their schedule (deleted/added classes),
- * their schedule is 100% authoritative and will NEVER revert on refresh or server cold-start.
+ * Guaranteed permanent schedule persistence across Vercel serverless cold starts.
+ * The client device maintains an authoritative timestamped schedule that self-heals
+ * serverless lambda instances whenever they cycle or cold-start.
  */
 export async function fetchAllClasses(): Promise<JEEClass[]> {
   const local = getLocalClasses();
-  const backup = getBackupClasses();
-  const effectiveLocal: JEEClass[] = (local !== null ? local : backup).filter((c) => !isDummyClass(c));
-  const userCustomized = isScheduleCustomized() || effectiveLocal.length > 0;
+  const localUpdatedAt = getLocalUpdatedAt();
 
   try {
     const res = await fetch(`/api/classes?_t=${Date.now()}`, {
@@ -143,55 +155,71 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.classes)) {
-        const cleanServer = data.classes.filter((c: any) => !isDummyClass(c));
+        const cleanServer: JEEClass[] = data.classes.filter((c: any) => !isDummyClass(c));
+        const serverUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : 0;
 
-        // When user has existing classes or customized schedule:
-        // Local schedule is the single source of truth.
-        // NEVER let a fresh deploy or empty server erase user's classes!
-        if (userCustomized && effectiveLocal.length > 0) {
-          // If server is empty (e.g. fresh Vercel deploy) or out of sync:
-          // Immediately repopulate server with user's authoritative schedule!
-          const serverIds = new Set(cleanServer.map((c: any) => c.id));
-          const localIds = new Set(effectiveLocal.map((c) => c.id));
+        // CASE 1: Local has classes, and local was modified at or after server
+        if (local.length > 0 && localUpdatedAt >= serverUpdatedAt) {
+          const serverIds = new Set(cleanServer.map((c) => c.id));
+          const localIds = new Set(local.map((c) => c.id));
           const isIdentical =
             serverIds.size === localIds.size &&
             [...localIds].every((id) => serverIds.has(id));
 
+          // If serverless container is cold or out of sync, heal it immediately
           if (!isIdentical) {
             fetch('/api/classes/sync', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ classes: effectiveLocal }),
+              headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
+              body: JSON.stringify({ classes: local, updatedAt: localUpdatedAt }),
             }).catch(() => {});
           }
 
-          setLocalClasses(effectiveLocal);
-          return effectiveLocal;
+          return local;
         }
 
-        if (userCustomized && effectiveLocal.length === 0) {
-          // User explicitly emptied their schedule
-          setLocalClasses([]);
+        // CASE 2: Local was explicitly cleared by user (local is [] and localUpdatedAt > 0)
+        if (local.length === 0 && localUpdatedAt > 0 && localUpdatedAt >= serverUpdatedAt) {
+          if (cleanServer.length > 0) {
+            fetch('/api/classes/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
+              body: JSON.stringify({ classes: [], updatedAt: localUpdatedAt }),
+            }).catch(() => {});
+          }
           return [];
         }
 
-        // Fresh visitor with no prior local schedule: adopt server classes
-        setLocalClasses(cleanServer);
+        // CASE 3: Server has newer updates (e.g. published from another device)
+        if (cleanServer.length > 0 && serverUpdatedAt > localUpdatedAt) {
+          setLocalClasses(cleanServer, serverUpdatedAt);
+          return cleanServer;
+        }
+
+        // CASE 4: Fresh visitor with no prior local history (local is [] and localUpdatedAt === 0)
+        if (local.length === 0 && localUpdatedAt === 0) {
+          if (cleanServer.length > 0) {
+            setLocalClasses(cleanServer, serverUpdatedAt || Date.now());
+          }
+          return cleanServer;
+        }
+
+        if (local.length > 0) return local;
         return cleanServer;
       }
     }
   } catch (err) {
-    // Network / static host fallback
+    // Network / static host fallback: local storage is 100% authoritative
   }
 
-  return effectiveLocal;
+  return local;
 }
 
 /**
  * Export complete timetable to JSON string for safety backup
  */
 export function exportScheduleBackup(): string {
-  const local = getLocalClasses() || [];
+  const local = getLocalClasses();
   return JSON.stringify(local.filter((c) => !isDummyClass(c)), null, 2);
 }
 
@@ -205,15 +233,15 @@ export async function importScheduleBackup(jsonStr: string): Promise<{ success: 
       return { success: false, count: 0, error: 'Uploaded file is not a valid schedule array.' };
     }
     const clean = parsed.filter((c: any) => c && c.title && c.start_at && !isDummyClass(c));
-    markScheduleCustomized();
-    setLocalClasses(clean);
+    const now = Date.now();
+    setLocalClasses(clean, now);
 
     // Sync to server
     try {
       await fetch('/api/classes/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ classes: clean }),
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
+        body: JSON.stringify({ classes: clean, updatedAt: now }),
       });
     } catch (e) {}
 
@@ -227,28 +255,29 @@ export async function importScheduleBackup(jsonStr: string): Promise<{ success: 
  * Save new class
  */
 export async function saveNewClass(
-  newClass: Omit<JEEClass, 'id' | 'created_at'>
+  newClass: Omit<JEEClass, 'id' | 'created_at'> & { id?: string }
 ): Promise<JEEClass> {
-  markScheduleCustomized();
-  const localId = `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const localId = newClass.id || `class-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const created: JEEClass = {
     ...newClass,
     id: localId,
     created_at: new Date().toISOString(),
   };
 
-  clearDeletedClassId(localId);
-
-  // 1. Immediately store in localStorage & backup so it is 100% saved on this device
-  const current = getLocalClasses() || [];
+  // 1. Immediately store in localStorage so it appears without latency
+  const current = getLocalClasses();
   const updated = [...current.filter((c) => c.id !== localId), created];
-  setLocalClasses(updated);
+  const now = Date.now();
+  setLocalClasses(updated, now);
 
   // 2. Persist to server / Vercel API
   try {
     const res = await fetch('/api/classes', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store',
+      },
       body: JSON.stringify(created),
     });
 
@@ -256,38 +285,93 @@ export async function saveNewClass(
       const data = await res.json();
       if (data.class) {
         const synced = [...updated.filter((c) => c.id !== localId && c.id !== data.class.id), data.class];
-        setLocalClasses(synced);
+        setLocalClasses(synced, now);
+        // Sync full schedule to serverless containers
+        fetch('/api/classes/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
+          body: JSON.stringify({ classes: synced, updatedAt: now }),
+        }).catch(() => {});
         return data.class;
       }
     }
   } catch (err) {
-    // Local persistence guarantees zero data loss even if server call fails
+    // Local persistence guarantees zero data loss
   }
 
+  // Backup sync
+  fetch('/api/classes/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
+    body: JSON.stringify({ classes: updated, updatedAt: now }),
+  }).catch(() => {});
+
   return created;
+}
+
+/**
+ * Update class in store and backend
+ */
+export async function updateClassInStore(
+  id: string,
+  updates: Partial<JEEClass>
+): Promise<JEEClass | null> {
+  const current = getLocalClasses();
+  const index = current.findIndex((c) => c.id === id);
+  if (index === -1) return null;
+
+  const updatedClass: JEEClass = {
+    ...current[index],
+    ...updates,
+  };
+  const updatedList = [...current];
+  updatedList[index] = updatedClass;
+  const now = Date.now();
+  setLocalClasses(updatedList, now);
+
+  try {
+    await fetch(`/api/classes/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store',
+      },
+      body: JSON.stringify(updates),
+    });
+  } catch (e) {}
+
+  fetch('/api/classes/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
+    body: JSON.stringify({ classes: updatedList, updatedAt: now }),
+  }).catch(() => {});
+
+  return updatedClass;
 }
 
 /**
  * Delete class
  */
 export async function removeClass(id: string): Promise<boolean> {
-  markScheduleCustomized();
-  // 1. Mark as deleted in tombstones so cold starts cannot resurrect it
-  addDeletedClassId(id);
-
-  // 2. Immediately update local storage
-  const current = getLocalClasses() || [];
+  const current = getLocalClasses();
   const updated = current.filter((c) => c.id !== id);
-  setLocalClasses(updated);
+  const now = Date.now();
+  setLocalClasses(updated, now);
 
-  // 3. Call backend to remove from persistent file
   try {
     await fetch(`/api/classes/${id}`, {
       method: 'DELETE',
+      headers: { 'Cache-Control': 'no-cache, no-store' },
     });
   } catch (err) {
     // Continue with local delete
   }
+
+  fetch('/api/classes/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
+    body: JSON.stringify({ classes: updated, updatedAt: now }),
+  }).catch(() => {});
 
   return true;
 }
@@ -296,15 +380,22 @@ export async function removeClass(id: string): Promise<boolean> {
  * Clear all classes (empty timetable)
  */
 export async function clearAllClassesFromStore(): Promise<boolean> {
-  markScheduleCustomized();
-  const current = getLocalClasses() || [];
-  current.forEach((c) => addDeletedClassId(c.id));
-  setLocalClasses([]);
+  const now = Date.now();
+  setLocalClasses([], now);
+
   try {
-    await fetch('/api/classes/clear', { method: 'POST' });
-  } catch (err) {
-    // Continue
-  }
+    await fetch('/api/classes/clear', {
+      method: 'POST',
+      headers: { 'Cache-Control': 'no-cache, no-store' },
+    });
+  } catch (err) {}
+
+  fetch('/api/classes/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
+    body: JSON.stringify({ classes: [], updatedAt: now }),
+  }).catch(() => {});
+
   return true;
 }
 
@@ -312,12 +403,7 @@ export async function clearAllClassesFromStore(): Promise<boolean> {
  * Reset classes to default schedule (Only if explicitly clicked by admin)
  */
 export async function resetAllClasses(): Promise<JEEClass[]> {
-  markScheduleCustomized();
-  try {
-    await fetch('/api/classes/reset', { method: 'POST' });
-  } catch (err) {}
-
-  setLocalClasses([]);
+  await clearAllClassesFromStore();
   return [];
 }
 
@@ -336,7 +422,9 @@ let hasSyncedAttendance = false;
 export async function syncServerAttendance(): Promise<void> {
   if (hasSyncedAttendance || typeof window === 'undefined') return;
   try {
-    const res = await fetch('/api/attendance');
+    const res = await fetch('/api/attendance', {
+      headers: { 'Cache-Control': 'no-cache, no-store' },
+    });
     if (res.ok) {
       const data = await res.json();
       if (data.attendance && typeof data.attendance === 'object') {
@@ -392,7 +480,7 @@ export function recordClassAttendance(
     // Long-term server persistence
     fetch('/api/attendance', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store' },
       body: JSON.stringify({ attendance: { [classId]: map[classId] } }),
     }).catch(() => {});
   } catch (e) {

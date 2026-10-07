@@ -4,6 +4,7 @@ const { Router } = express;
 import webpush from 'web-push';
 import {
   getAllClasses,
+  getAllClassesWithTimestamp,
   getClassById,
   createClass,
   updateClass,
@@ -38,9 +39,10 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   }
 }
 
-// Disable caching across Vercel Edge CDN, proxies, and browsers
+// Disable caching and ETags across Vercel Edge CDN, proxies, and browsers
 apiRouter.use((_req: Request, res: Response, next) => {
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.removeHeader('ETag');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
   res.set('Surrogate-Control', 'no-store');
@@ -50,8 +52,8 @@ apiRouter.use((_req: Request, res: Response, next) => {
 // 1. Get all scheduled classes
 apiRouter.get('/classes', async (req: Request, res: Response) => {
   try {
-    const classes = await getAllClasses();
-    res.json({ classes });
+    const { classes, updatedAt } = await getAllClassesWithTimestamp();
+    res.json({ classes, updatedAt });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -74,7 +76,7 @@ apiRouter.get('/classes/:id', async (req: Request, res: Response) => {
 apiRouter.post('/classes/reset', async (req: Request, res: Response) => {
   try {
     const classes = await resetClasses();
-    res.json({ success: true, classes });
+    res.json({ success: true, classes, updatedAt: Date.now() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -84,7 +86,7 @@ apiRouter.post('/classes/reset', async (req: Request, res: Response) => {
 apiRouter.post('/classes/clear', async (req: Request, res: Response) => {
   try {
     await clearAllClasses();
-    res.json({ success: true, classes: [] });
+    res.json({ success: true, classes: [], updatedAt: Date.now() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -93,9 +95,9 @@ apiRouter.post('/classes/clear', async (req: Request, res: Response) => {
 // 2c. Bidirectional class schedule synchronization (protects multi-month scheduled classes)
 apiRouter.post('/classes/sync', async (req: Request, res: Response) => {
   try {
-    const { classes: clientClasses } = req.body;
-    const synced = await syncClasses(clientClasses);
-    res.json({ success: true, classes: synced });
+    const { classes: clientClasses, updatedAt } = req.body;
+    const synced = await syncClasses(clientClasses, updatedAt);
+    res.json({ success: true, classes: synced, updatedAt });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

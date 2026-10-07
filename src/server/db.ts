@@ -17,18 +17,16 @@ export const DUMMY_IDS = new Set([
   'class-chem-coordination',
 ]);
 
+const DUMMY_FACULTY = new Set([
+  'Er. R. Sharma (Ex-IIT Delhi)',
+  'Prof. A. N. Murthy (IIT Madras Alumni)',
+  'Dr. Neha Agarwal (Ph.D. Chemistry)',
+]);
+
 export function isDummyClass(cls: any): boolean {
   if (!cls) return true;
   if (cls.id && DUMMY_IDS.has(cls.id)) return true;
-  const title = (cls.title || '').trim().toLowerCase();
-  if (
-    title.includes('rotational motion') ||
-    title.includes('electrostatics') ||
-    title.includes('definite integration') ||
-    title.includes('coordination chemistry')
-  ) {
-    return true;
-  }
+  if (cls.faculty && DUMMY_FACULTY.has(cls.faculty)) return true;
   return false;
 }
 
@@ -140,9 +138,15 @@ function persistClasses(): void {
 }
 
 let classesStore: JEEClass[] = loadPersistedClasses();
+let classesUpdatedAt: number = Date.now();
 let subscriptionsStore: PushSubscriptionData[] = [];
 
 export async function getAllClasses(): Promise<JEEClass[]> {
+  const result = await getAllClassesWithTimestamp();
+  return result.classes;
+}
+
+export async function getAllClassesWithTimestamp(): Promise<{ classes: JEEClass[]; updatedAt: number }> {
   const config = getSupabaseConfig();
   if (config) {
     try {
@@ -185,7 +189,7 @@ export async function getAllClasses(): Promise<JEEClass[]> {
             created_at: row.created_at || new Date().toISOString(),
           }));
           persistClasses();
-          return classesStore;
+          return { classes: classesStore, updatedAt: classesUpdatedAt };
         }
       } else {
         const errText = await res.text();
@@ -196,9 +200,10 @@ export async function getAllClasses(): Promise<JEEClass[]> {
     }
   }
 
-  return [...classesStore]
+  const clean = [...classesStore]
     .filter((c) => !isDummyClass(c))
     .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+  return { classes: clean, updatedAt: classesUpdatedAt };
 }
 
 export async function getClassById(id: string): Promise<JEEClass | null> {
@@ -282,6 +287,7 @@ export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { 
           };
           classesStore = classesStore.filter((c) => c.id !== savedClass.id && !isDummyClass(c));
           classesStore.push(savedClass);
+          classesUpdatedAt = Date.now();
           persistClasses();
           return savedClass;
         }
@@ -302,6 +308,7 @@ export async function createClass(data: Omit<JEEClass, 'id' | 'created_at'> & { 
   };
   classesStore = classesStore.filter((c) => c.id !== localId && !isDummyClass(c));
   classesStore.push(newClass);
+  classesUpdatedAt = Date.now();
   persistClasses();
   return newClass;
 }
@@ -343,6 +350,7 @@ export async function updateClass(id: string, updates: Partial<JEEClass>): Promi
     ...updates,
     subject: updates.subject ? normalizeSubject(updates.subject) : classesStore[index].subject,
   };
+  classesUpdatedAt = Date.now();
   persistClasses();
   return classesStore[index];
 }
@@ -365,6 +373,7 @@ export async function deleteClass(id: string): Promise<boolean> {
   }
 
   classesStore = classesStore.filter((c) => c.id !== id);
+  classesUpdatedAt = Date.now();
   persistClasses();
   return true;
 }
@@ -385,6 +394,7 @@ export async function clearAllClasses(): Promise<void> {
   }
 
   classesStore = [];
+  classesUpdatedAt = Date.now();
   persistClasses();
 }
 
@@ -393,55 +403,63 @@ export async function resetClasses(): Promise<JEEClass[]> {
   return [];
 }
 
-export async function syncClasses(clientClasses: JEEClass[]): Promise<JEEClass[]> {
+export async function syncClasses(clientClasses: JEEClass[], clientUpdatedAt?: number): Promise<JEEClass[]> {
   if (!Array.isArray(clientClasses)) return getAllClasses();
 
   // Strip all dummy classes immediately
   const cleanList = clientClasses.filter((c) => !isDummyClass(c));
   classesStore = cleanList;
+  classesUpdatedAt = typeof clientUpdatedAt === 'number' && clientUpdatedAt > 0 ? clientUpdatedAt : Date.now();
   persistClasses();
 
   const config = getSupabaseConfig();
-  if (config && cleanList.length > 0) {
+  if (config) {
     try {
-      for (const cls of cleanList) {
-        if (!cls.title || !cls.youtube_url || !cls.start_at) continue;
-        const row: any = {
-          title: cls.title,
-          subject: normalizeSubject(cls.subject),
-          faculty: cls.faculty || 'Faculty',
-          topic: cls.topic || '',
-          description: cls.description || '',
-          youtube_url: cls.youtube_url,
-          youtube_id: cls.youtube_id,
-          start_at: cls.start_at,
-          duration_min: Number(cls.duration_min),
-          is_embeddable: cls.is_embeddable !== false,
-        };
+      if (cleanList.length === 0) {
+        await fetch(`${config.url}/rest/v1/classes?duration_min=gt.0`, {
+          method: 'DELETE',
+          headers: getSupabaseHeaders(config.key),
+        });
+      } else {
+        for (const cls of cleanList) {
+          if (!cls.title || !cls.youtube_url || !cls.start_at) continue;
+          const row: any = {
+            title: cls.title,
+            subject: normalizeSubject(cls.subject),
+            faculty: cls.faculty || 'Faculty',
+            topic: cls.topic || '',
+            description: cls.description || '',
+            youtube_url: cls.youtube_url,
+            youtube_id: cls.youtube_id,
+            start_at: cls.start_at,
+            duration_min: Number(cls.duration_min),
+            is_embeddable: cls.is_embeddable !== false,
+          };
 
-        if (cls.id && UUID_REGEX.test(cls.id)) {
-          row.id = cls.id;
-          await fetch(`${config.url}/rest/v1/classes`, {
-            method: 'POST',
-            headers: {
-              ...getSupabaseHeaders(config.key),
-              Prefer: 'resolution=merge-duplicates',
-            },
-            body: JSON.stringify(row),
-          });
-        } else {
-          const checkRes = await fetch(
-            `${config.url}/rest/v1/classes?start_at=eq.${encodeURIComponent(cls.start_at)}&select=id`,
-            { headers: getSupabaseHeaders(config.key) }
-          );
-          if (checkRes.ok) {
-            const existing = await checkRes.json();
-            if (!Array.isArray(existing) || existing.length === 0) {
-              await fetch(`${config.url}/rest/v1/classes`, {
-                method: 'POST',
-                headers: getSupabaseHeaders(config.key),
-                body: JSON.stringify(row),
-              });
+          if (cls.id && UUID_REGEX.test(cls.id)) {
+            row.id = cls.id;
+            await fetch(`${config.url}/rest/v1/classes`, {
+              method: 'POST',
+              headers: {
+                ...getSupabaseHeaders(config.key),
+                Prefer: 'resolution=merge-duplicates',
+              },
+              body: JSON.stringify(row),
+            });
+          } else {
+            const checkRes = await fetch(
+              `${config.url}/rest/v1/classes?start_at=eq.${encodeURIComponent(cls.start_at)}&select=id`,
+              { headers: getSupabaseHeaders(config.key) }
+            );
+            if (checkRes.ok) {
+              const existing = await checkRes.json();
+              if (!Array.isArray(existing) || existing.length === 0) {
+                await fetch(`${config.url}/rest/v1/classes`, {
+                  method: 'POST',
+                  headers: getSupabaseHeaders(config.key),
+                  body: JSON.stringify(row),
+                });
+              }
             }
           }
         }

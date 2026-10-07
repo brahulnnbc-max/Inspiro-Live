@@ -13,6 +13,7 @@ const __dirname = path.dirname(__filename);
 
 export function createExpressApp() {
   const app = express();
+  app.set('etag', false);
 
   app.use(express.json());
 
@@ -40,6 +41,7 @@ async function startServer() {
       const vite = await createViteServer({
         server: {
           middlewareMode: true,
+          allowedHosts: true,
           hmr: process.env.DISABLE_HMR !== 'true',
           watch: process.env.DISABLE_HMR === 'true' ? null : {},
         },
