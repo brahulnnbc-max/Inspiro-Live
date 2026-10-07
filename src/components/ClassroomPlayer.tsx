@@ -386,7 +386,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
     };
   }, [clockState.status, jeeClass, replayMode]);
 
-  // Trigger Note Key Moment Modal
+// Trigger Note Key Moment Modal (or instant 1-click timestamp in rotate mode)
   const handleTriggerBookmark = () => {
     const player = playerRef.current;
     let sec = clockState.elapsedSeconds;
@@ -398,7 +398,23 @@ export const ClassroomPlayer: React.FC<Props> = ({
         // Fallback to clockState
       }
     }
-    setCurrentBookmarkSeconds(Math.max(0, Math.floor(sec)));
+    const targetSec = Math.max(0, Math.floor(sec));
+
+    // During Rotate Live: Immediately save timestamp into notebook table without any popup!
+    if (isRotateMode) {
+      const saved = addBookmark(
+        jeeClass.id,
+        targetSec,
+        'mistake',
+        `Timestamp marked during live lecture`
+      );
+      setBookmarks(getBookmarksForClass(jeeClass.id));
+      setLockWarningToast(`⏱️ Timestamp saved at ${saved.timestampFormatted} into moments notebook!`);
+      setTimeout(() => setLockWarningToast(null), 3000);
+      return;
+    }
+
+    setCurrentBookmarkSeconds(targetSec);
     setBookmarkNote('');
     setBookmarkCategory('mistake');
     setIsBookmarkModalOpen(true);
