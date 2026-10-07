@@ -113,6 +113,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
 
   // Lock Warning Toast for Live Mode
   const [lockWarningToast, setLockWarningToast] = useState<string | null>(null);
+  const [justSavedTime, setJustSavedTime] = useState<string | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
 
   // Incognito & Embed Restriction Fallback States
@@ -386,7 +387,15 @@ export const ClassroomPlayer: React.FC<Props> = ({
     };
   }, [clockState.status, jeeClass, replayMode]);
 
-// Trigger Note Key Moment Modal (or instant 1-click timestamp in rotate mode)
+
+  const handleSaveBookmark = () => {
+    const saved = addBookmark(
+      jeeClass.id,
+      currentBookmarkSeconds,
+      bookmarkCategory,
+      bookmarkNote
+    );
+    setBookmarks(getBookmarks// Trigger Note Key Moment (Instant 1-Click Timestamp in Rotate Mode)
   const handleTriggerBookmark = () => {
     const player = playerRef.current;
     let sec = clockState.elapsedSeconds;
@@ -400,16 +409,18 @@ export const ClassroomPlayer: React.FC<Props> = ({
     }
     const targetSec = Math.max(0, Math.floor(sec));
 
-    // During Rotate Live: Immediately save timestamp into notebook table without any popup!
+    // IN ROTATE MODE: 1-Click instant save directly into moments table (NO POPUP!)
     if (isRotateMode) {
       const saved = addBookmark(
         jeeClass.id,
         targetSec,
         'mistake',
-        `Timestamp marked during live lecture`
+        `Timestamp marked at ${formatISTTime(new Date().toISOString())}`
       );
       setBookmarks(getBookmarksForClass(jeeClass.id));
-      setLockWarningToast(`⏱️ Timestamp saved at ${saved.timestampFormatted} into moments notebook!`);
+      setJustSavedTime(saved.timestampFormatted);
+      setTimeout(() => setJustSavedTime(null), 2500);
+      setLockWarningToast(`⏱️ Timestamp ${saved.timestampFormatted} saved to moments table!`);
       setTimeout(() => setLockWarningToast(null), 3000);
       return;
     }
@@ -419,15 +430,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
     setBookmarkCategory('mistake');
     setIsBookmarkModalOpen(true);
   };
-
-  const handleSaveBookmark = () => {
-    const saved = addBookmark(
-      jeeClass.id,
-      currentBookmarkSeconds,
-      bookmarkCategory,
-      bookmarkNote
-    );
-    setBookmarks(getBookmarksForClass(jeeClass.id));
+    ForClass(jeeClass.id));
     setIsBookmarkModalOpen(false);
     setBookmarkNote('');
     setLockWarningToast(`🔖 Note Moment saved at ${saved.timestampFormatted}`);
