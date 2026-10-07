@@ -36,6 +36,7 @@ import {
   Brain,
   ShieldAlert,
   ExternalLink,
+  Youtube,
 } from 'lucide-react';
 import { JEEClass } from '../types/class';
 import { getLiveClockStatus, formatISTDateTime, formatISTTime, formatDurationHMS, formatCountdownString } from '../lib/istTime';
@@ -113,6 +114,11 @@ export const ClassroomPlayer: React.FC<Props> = ({
   // Lock Warning Toast for Live Mode
   const [lockWarningToast, setLockWarningToast] = useState<string | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
+
+  // Incognito & Embed Restriction Fallback States
+  const [isPlaybackRestricted, setIsPlaybackRestricted] = useState(false);
+  const [playbackErrorCode, setPlaybackErrorCode] = useState<number | null>(null);
+  const [useDirectIframe, setUseDirectIframe] = useState(false);
 
   // Refresh bookmarks when updated
   useEffect(() => {
@@ -192,6 +198,10 @@ export const ClassroomPlayer: React.FC<Props> = ({
     let checkInterval: any = null;
 
     const initPlayer = () => {
+      if (useDirectIframe) {
+        return true;
+      }
+
       if (!window.YT || !window.YT.Player) {
         return false;
       }
@@ -208,8 +218,12 @@ export const ClassroomPlayer: React.FC<Props> = ({
         startOffset = initialSeekSeconds;
       }
 
+      const pageOrigin = typeof window !== 'undefined' ? window.location.origin : undefined;
+      const pageHref = typeof window !== 'undefined' ? window.location.href : undefined;
+
       playerRef.current = new window.YT.Player('youtube-classroom-frame', {
         videoId: jeeClass.youtube_id,
+        host: 'https://www.youtube-nocookie.com',
         playerVars: {
           autoplay: initialClock.status === 'live' || (typeof initialSeekSeconds === 'number') ? 1 : 0,
           controls: replayMode || initialClock.status === 'ended' || (typeof initialSeekSeconds === 'number') ? 1 : 0, // Unlock controls when jumping to specific moment
@@ -220,6 +234,9 @@ export const ClassroomPlayer: React.FC<Props> = ({
           playsinline: 1,
           fs: 0,
           iv_load_policy: 3,
+          enablejsapi: 1,
+          origin: pageOrigin,
+          widget_referrer: pageHref,
         },
         events: {
           onReady: (event: any) => {
@@ -246,6 +263,7 @@ export const ClassroomPlayer: React.FC<Props> = ({
             if (event.data === 1) {
               setIsPlaying(true);
               setIsAutoplayBlocked(false);
+              setIsPlaybackRestricted(false);
             } else if (event.data === 2) {
               setIsPlaying(false);
               // In live mode, if user paused, we notify and let sync heartbeat handle catch-up
@@ -253,6 +271,13 @@ export const ClassroomPlayer: React.FC<Props> = ({
           },
           onError: (err: any) => {
             console.warn('YouTube Player error code:', err.data);
+            // Error codes:
+            // 2: Invalid parameter
+            // 5: HTML5 error
+            // 100: Video not found or private
+            // 101 or 150: The owner does not allow it to be played in embedded players (Video Unavailable)
+            setIsPlaybackRestricted(true);
+            setPlaybackErrorCode(typeof err.data === 'number' ? err.data : 150);
           },
         },
       });
@@ -1154,9 +1179,68 @@ export const ClassroomPlayer: React.FC<Props> = ({
           )}
 
           {/* 2. THE ACTUAL YOUTUBE IFRAME */}
-          <div className="w-full h-full">
-            <div id="youtube-classroom-frame" className="w-full h-full pointer-events-auto" />
+          <div className="w-full h-full relative">
+            {useDirectIframe ? (
+              <iframe
+                src={`https://www.youtube-nocookie.com/embed/${jeeClass.youtube_id}?autoplay=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(typeof window !== 'undefined' ? window.location.origin : '')}`}
+                title={jeeClass.title}
+                className="w-full h-full border-0 pointer-events-auto"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            ) : (
+              <div id="youtube-classroom-frame" className="w-full h-full pointer-events-auto" />
+            )}
           </div>
+
+          {/* EMBED RESTRICTION / UNAVAILABLE FALLBACK OVERLAY */}
+          {(isPlaybackRestricted || jeeClass.is_embeddable === false) && (
+            <div className="absolute inset-0 z-35 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/40 shadow-lg shadow-amber-950/50">
+                <AlertTriangle className="w-7 h-7" />
+              </div>
+              <div className="space-y-1.5 max-w-md">
+                <h3 className="text-base sm:text-lg font-bold text-white">
+                  YouTube Playback Notice
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {playbackErrorCode === 150 || playbackErrorCode === 101 || jeeClass.is_embeddable === false
+                    ? 'The video author disabled 3rd-party web embeds, or your incognito browser blocked YouTube tracking cookies.'
+                    : playbackErrorCode === 100
+                    ? 'This YouTube video is private or has been removed.'
+                    : 'YouTube player encountered a playback restriction on this browser or incognito session.'}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                <a
+                  href={`https://www.youtube.com/watch?v=${jeeClass.youtube_id}${clockState.elapsedSeconds > 0 ? `&t=${clockState.elapsedSeconds}s` : ''}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl transition-all shadow-lg shadow-red-950/50 flex items-center gap-2 hover:scale-[1.02]"
+                >
+                  <Youtube className="w-4 h-4 fill-current" />
+                  <span>Watch on YouTube App</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+
+                <button
+                  onClick={() => {
+                    setIsPlaybackRestricted(false);
+                    setUseDirectIframe(true);
+                  }}
+                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 transition-colors flex items-center gap-2"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Try Direct No-Cookie Embed</span>
+                </button>
+              </div>
+
+              <p className="text-[11px] font-mono text-emerald-400/90 pt-1">
+                ✓ Study tracking and notes remain synchronized with your classroom session.
+              </p>
+            </div>
+          )}
 
           {/* 3. SEEK-LOCK SHIELD OVERLAY (During Live Mode) */}
           {clockState.status === 'live' && !replayMode && (

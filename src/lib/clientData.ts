@@ -90,17 +90,29 @@ function migrateLegacyStorage(): JEEClass[] | null {
   return null;
 }
 
+const AUTO_BACKUP_KEY = 'inspiro_jee_classes_recovery_v3';
+
 export function getLocalClasses(): JEEClass[] {
   if (typeof window === 'undefined') return [];
   const migrated = migrateLegacyStorage();
-  if (migrated !== null) return migrated;
+  if (migrated !== null && migrated.length > 0) return migrated;
 
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
+      if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed.filter((c) => !isDummyClass(c));
+      }
+    }
+    // Safety recovery fallback key
+    const recoveryRaw = localStorage.getItem(AUTO_BACKUP_KEY);
+    if (recoveryRaw) {
+      const parsed = JSON.parse(recoveryRaw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const clean = parsed.filter((c) => !isDummyClass(c));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
+        return clean;
       }
     }
   } catch (e) {
@@ -125,6 +137,9 @@ export function setLocalClasses(classes: JEEClass[], updatedAt: number = Date.no
     const clean = classes.filter((c) => !isDummyClass(c));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
     localStorage.setItem(UPDATED_AT_KEY, String(updatedAt));
+    if (clean.length > 0) {
+      localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(clean));
+    }
     markScheduleCustomized();
     window.dispatchEvent(new CustomEvent('inspiro_classes_updated', { detail: clean }));
   } catch (e) {
@@ -134,12 +149,13 @@ export function setLocalClasses(classes: JEEClass[], updatedAt: number = Date.no
 
 /**
  * Universal Class Fetcher:
- * Queries the authoritative server timetable (backed by Supabase Primary + Server Disk Backup).
- * Automatically updates localStorage for offline caching without allowing stale client
- * local storage to override or corrupt the server schedule.
+ * Queries the server timetable while strictly protecting the student's local 6-month study schedule.
+ * If a serverless host (such as Vercel) cold-starts empty without Supabase, the student's phone schedule
+ * is never wiped—instead, it self-heals the server.
  */
 export async function fetchAllClasses(): Promise<JEEClass[]> {
   const local = getLocalClasses();
+  const localUpdatedAt = getLocalUpdatedAt();
 
   try {
     const res = await fetch(`/api/classes?_t=${Date.now()}`, {
@@ -157,9 +173,40 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
         const cleanServer: JEEClass[] = data.classes.filter((c: any) => !isDummyClass(c));
         const serverUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : Date.now();
 
-        // Always update local storage with authoritative server timetable
-        setLocalClasses(cleanServer, serverUpdatedAt);
-        return cleanServer;
+        // CASE 1: Student has 6-month study schedule on phone, but server cold-started empty (e.g. Vercel without DB)
+        if (local.length > 0 && cleanServer.length === 0) {
+          // NEVER wipe student schedule! Keep local and heal the serverless container
+          fetch('/api/classes/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ classes: local, updatedAt: localUpdatedAt || Date.now() }),
+          }).catch(() => {});
+          return local;
+        }
+
+        // CASE 2: Both phone and server have classes -> Merge by ID so zero classes are lost
+        if (local.length > 0 && cleanServer.length > 0) {
+          const map = new Map<string, JEEClass>();
+          cleanServer.forEach((c) => map.set(c.id, c));
+          local.forEach((c) => {
+            if (!map.has(c.id)) {
+              map.set(c.id, c);
+            }
+          });
+          const merged = Array.from(map.values()).sort(
+            (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+          );
+          setLocalClasses(merged, Math.max(serverUpdatedAt, localUpdatedAt));
+          return merged;
+        }
+
+        // CASE 3: Fresh device / incognito with no prior history -> Take server classes
+        if (local.length === 0 && cleanServer.length > 0) {
+          setLocalClasses(cleanServer, serverUpdatedAt);
+          return cleanServer;
+        }
+
+        return local;
       }
     }
   } catch (err) {
@@ -242,29 +289,20 @@ export async function saveNewClass(
       body: JSON.stringify(payload),
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      const saved = data.class || payload;
-      const current = getLocalClasses();
-      const updated = [...current.filter((c) => c.id !== saved.id && c.id !== targetId), saved];
-      setLocalClasses(updated, Date.now());
-      return saved;
-    } else {
+    if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.message || err.error || `Server returned HTTP ${res.status}`);
     }
-  } catch (err: any) {
-    // If server offline, preserve in localStorage backup
-    console.warn('Server offline during saveNewClass, storing locally:', err);
-    const fallbackClass: JEEClass = {
-      ...newClass,
-      id: targetId,
-      created_at: new Date().toISOString(),
-    };
+
+    const data = await res.json();
+    const saved = data.class || payload;
     const current = getLocalClasses();
-    const updated = [...current.filter((c) => c.id !== targetId), fallbackClass];
+    const updated = [...current.filter((c) => c.id !== saved.id && c.id !== targetId), saved];
     setLocalClasses(updated, Date.now());
-    return fallbackClass;
+    return saved;
+  } catch (err: any) {
+    console.error('Error saving class to server:', err);
+    throw err;
   }
 }
 

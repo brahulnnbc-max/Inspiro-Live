@@ -194,6 +194,34 @@ export const AdminPanel: React.FC<Props> = ({
     }
   };
 
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+
+  const handleBroadcastSchedule = async () => {
+    setIsBroadcasting(true);
+    try {
+      const res = await fetch('/api/classes/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ classes, updatedAt: Date.now() }),
+      });
+      if (res.ok) {
+        setFormStatus({
+          type: 'success',
+          message: `Broadcasted ${classes.length} classes to the server! All new phones, incognito tabs, and student devices will now see this timetable immediately.`,
+        });
+        await onRefreshClasses();
+        await fetchStorageStatus();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `Server returned HTTP ${res.status}`);
+      }
+    } catch (err: any) {
+      setFormStatus({ type: 'error', message: `Broadcast failed: ${err.message}` });
+    } finally {
+      setIsBroadcasting(false);
+    }
+  };
+
   // Single Class Form State
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState<JEEClassSubject>('Physics');
@@ -726,6 +754,16 @@ export const AdminPanel: React.FC<Props> = ({
           >
             <Send className="w-3.5 h-3.5 text-sky-400" />
             <span>Test Push Chime</span>
+          </button>
+
+          <button
+            onClick={handleBroadcastSchedule}
+            disabled={isBroadcasting}
+            className="px-3 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 disabled:opacity-50 rounded-lg transition-colors flex items-center gap-1.5 shadow"
+            title="Publish all scheduled classes on your phone to the server so new phones and incognito sessions see them immediately"
+          >
+            <Send className={`w-3.5 h-3.5 ${isBroadcasting ? 'animate-pulse' : ''}`} />
+            <span>Broadcast to All Devices</span>
           </button>
 
           <button
