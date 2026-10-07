@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Lock,
   Plus,
@@ -16,13 +16,15 @@ import {
   ArrowLeft,
   X,
   RotateCcw,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { JEEClass, JEEClassSubject } from '../types/class';
 import { extractYouTubeId, verifyYouTubeEmbeddability } from '../lib/youtube';
 import { checkScheduleOverlap } from '../lib/overlap';
 import { formatISTDateTime, formatISTTime } from '../lib/istTime';
 import { sendTestNotification } from '../lib/pushClient';
-import { saveNewClass, removeClass, resetAllClasses, fetchAllClasses, clearAllClassesFromStore, markScheduleCustomized } from '../lib/clientData';
+import { saveNewClass, removeClass, resetAllClasses, fetchAllClasses, clearAllClassesFromStore, markScheduleCustomized, exportScheduleBackup, importScheduleBackup } from '../lib/clientData';
 import { InspiroLogo } from './InspiroLogo';
 
 interface Props {
@@ -418,6 +420,43 @@ export const AdminPanel: React.FC<Props> = ({
       setFormStatus({ type: 'error', message: 'Clear failed: ' + err.message });
     }
   };
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleExportBackup = () => {
+    const jsonStr = exportScheduleBackup();
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `inspiro_classes_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setFormStatus({ type: 'success', message: 'Schedule backup downloaded! You can restore it anytime with 1 click.' });
+  };
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const text = event.target?.result as string;
+      if (text) {
+        const res = await importScheduleBackup(text);
+        if (res.success) {
+          setFormStatus({ type: 'success', message: `Restored ${res.count} scheduled classes successfully!` });
+          await onRefreshClasses();
+        } else {
+          setFormStatus({ type: 'error', message: res.error || 'Failed to restore schedule' });
+        }
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   // Login view if unauthenticated
   if (!isAuthenticated) {
     return (
@@ -501,7 +540,32 @@ export const AdminPanel: React.FC<Props> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleExportBackup}
+            className="px-3 py-1.5 text-xs font-semibold text-emerald-300 bg-emerald-950/40 border border-emerald-800/80 hover:bg-emerald-900/50 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+            title="Download full schedule backup JSON file to your device"
+          >
+            <Download className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Export Backup</span>
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-1.5 text-xs font-semibold text-sky-300 bg-sky-950/40 border border-sky-800/80 hover:bg-sky-900/50 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+            title="Upload and restore scheduled classes from backup JSON file"
+          >
+            <Upload className="w-3.5 h-3.5 text-sky-400" />
+            <span>Restore Backup</span>
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImportFileChange}
+            accept=".json,application/json"
+            className="hidden"
+          />
+
           <button
             onClick={handleClearAll}
             className="px-3 py-1.5 text-xs font-medium text-rose-300 bg-rose-950/30 border border-rose-900/60 hover:bg-rose-900/30 rounded-lg transition-colors flex items-center gap-1.5"

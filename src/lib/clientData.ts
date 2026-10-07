@@ -128,7 +128,7 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
   const local = getLocalClasses();
   const backup = getBackupClasses();
   const effectiveLocal: JEEClass[] = (local !== null ? local : backup).filter((c) => !isDummyClass(c));
-  const userCustomized = isScheduleCustomized() || local !== null;
+  const userCustomized = isScheduleCustomized() || effectiveLocal.length > 0;
 
   try {
     const res = await fetch(`/api/classes?_t=${Date.now()}`, {
@@ -145,12 +145,12 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
       if (Array.isArray(data.classes)) {
         const cleanServer = data.classes.filter((c: any) => !isDummyClass(c));
 
-        // When user has already managed their schedule:
+        // When user has existing classes or customized schedule:
         // Local schedule is the single source of truth.
-        // Never allow stale server containers to resurrect deleted classes!
-        if (userCustomized) {
-          // If server differs from local (e.g. server missing classes or has stale state),
-          // push local schedule to server in background to sync serverless workers
+        // NEVER let a fresh deploy or empty server erase user's classes!
+        if (userCustomized && effectiveLocal.length > 0) {
+          // If server is empty (e.g. fresh Vercel deploy) or out of sync:
+          // Immediately repopulate server with user's authoritative schedule!
           const serverIds = new Set(cleanServer.map((c: any) => c.id));
           const localIds = new Set(effectiveLocal.map((c) => c.id));
           const isIdentical =
@@ -169,7 +169,13 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
           return effectiveLocal;
         }
 
-        // Fresh visitor with no previous local schedule
+        if (userCustomized && effectiveLocal.length === 0) {
+          // User explicitly emptied their schedule
+          setLocalClasses([]);
+          return [];
+        }
+
+        // Fresh visitor with no prior local schedule: adopt server classes
         setLocalClasses(cleanServer);
         return cleanServer;
       }
@@ -179,6 +185,42 @@ export async function fetchAllClasses(): Promise<JEEClass[]> {
   }
 
   return effectiveLocal;
+}
+
+/**
+ * Export complete timetable to JSON string for safety backup
+ */
+export function exportScheduleBackup(): string {
+  const local = getLocalClasses() || [];
+  return JSON.stringify(local.filter((c) => !isDummyClass(c)), null, 2);
+}
+
+/**
+ * Import and restore timetable from JSON string
+ */
+export async function importScheduleBackup(jsonStr: string): Promise<{ success: boolean; count: number; error?: string }> {
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (!Array.isArray(parsed)) {
+      return { success: false, count: 0, error: 'Uploaded file is not a valid schedule array.' };
+    }
+    const clean = parsed.filter((c: any) => c && c.title && c.start_at && !isDummyClass(c));
+    markScheduleCustomized();
+    setLocalClasses(clean);
+
+    // Sync to server
+    try {
+      await fetch('/api/classes/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ classes: clean }),
+      });
+    } catch (e) {}
+
+    return { success: true, count: clean.length };
+  } catch (err: any) {
+    return { success: false, count: 0, error: err.message || 'Invalid JSON format' };
+  }
 }
 
 /**

@@ -24,7 +24,12 @@ export default function App() {
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
-            return parsed.filter((c: any) => !isDummyClass(c));
+            const clean = parsed.filter((c: any) => !isDummyClass(c));
+            if (clean.length !== parsed.length) {
+              localStorage.setItem('inspiro_jee_classes_v2', JSON.stringify(clean));
+              localStorage.setItem('inspiro_jee_classes_backup_v2', JSON.stringify(clean));
+            }
+            return clean;
           }
         }
       } catch {}
