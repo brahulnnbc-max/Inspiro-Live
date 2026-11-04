@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#18181D"/>
+      <stop offset="100%" stop-color="#09090B"/>
+    </radialGradient>
+    <filter id="subtleShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- Solid Deep Black App Screen Background -->
+  <rect width="512" height="512" rx="108" fill="url(#bgGlow)"/>
+
+  <!-- Sleek Home Page Brand Badge Container -->
+  <g filter="url(#subtleShadow)">
+    <rect x="40" y="156" width="432" height="200" rx="36" fill="#0F0F12" stroke="#27272A" stroke-width="4"/>
+  </g>
+
+  <!-- Live Pulse Dot -->
+  <circle cx="82" cy="256" r="10" fill="#FF0000"/>
+  <circle cx="82" cy="256" r="18" fill="none" stroke="#FF0000" stroke-width="2.5" opacity="0.4"/>
+
+  <!-- inspiro (in pure white) -->
+  <text x="114" y="278" font-family="-apple-system, BlinkMacSystemFont, 'Plus Jakarta Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="78" font-weight="800" fill="#FFFFFF" letter-spacing="-2">inspiro</text>
+
+  <!-- LIVE (in vivid red) -->
+  <text x="368" y="278" font-family="-apple-system, BlinkMacSystemFont, 'Plus Jakarta Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="52" font-weight="900" fill="#FF0000" letter-spacing="1.5">LIVE</text>
+</svg>

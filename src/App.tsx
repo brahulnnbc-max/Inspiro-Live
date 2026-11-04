@@ -38,6 +38,7 @@ import { playLiveGateBell } from './lib/soundEngine';
 import { ScheduleModal } from './components/ScheduleModal';
 import { LiveBroadcastPlayer } from './components/LiveBroadcastPlayer';
 import { PdfThumbnail } from './components/PdfThumbnail';
+import { PWAInstallButton } from './components/PWAInstallButton';
 
 type ActiveTab = 'LIVE_HOME' | 'SPACED_6AM' | 'DOUBTS' | 'ATTENDANCE';
 
@@ -534,6 +535,8 @@ export default function App() {
 
         {/* Zone 3: Night/Day Screen Switch + Lock Chapter CTA */}
         <div className="flex items-center gap-2.5 shrink-0">
+          <PWAInstallButton isNightMode={isNightMode} />
+
           <button
             type="button"
             onClick={toggleNightDayMode}
