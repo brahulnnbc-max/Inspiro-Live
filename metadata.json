@@ -1,0 +1,6 @@
+{
+  "name": "GateBell — Live JEE Notes Classroom",
+  "description": "Turn your JEE digital notes folder into an immutable, wall-clock synchronized live classroom with 50-second auto-advancing slides, 45-second emergency holds, and immediate schedule locking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
