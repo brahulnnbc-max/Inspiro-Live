@@ -34,11 +34,18 @@ import {
 } from './lib/storage';
 import { buildElectrostaticsChapterSlides } from './lib/electrostaticsCatalog';
 import { SPACED_REPETITION_STAGES } from './lib/spacedRepetition';
-import { playLiveGateBell } from './lib/soundEngine';
+import {
+  playLiveGateBell,
+  startRepeatingClassroomAlarm,
+  stopRepeatingClassroomAlarm,
+} from './lib/soundEngine';
+import { dispatchSystemAlarmNotification } from './lib/notificationAlerts';
 import { ScheduleModal } from './components/ScheduleModal';
 import { LiveBroadcastPlayer } from './components/LiveBroadcastPlayer';
 import { PdfThumbnail } from './components/PdfThumbnail';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { LiveAlarmModal } from './components/LiveAlarmModal';
+import { NotificationSettingsButton } from './components/NotificationSettingsButton';
 
 type ActiveTab = 'LIVE_HOME' | 'SPACED_6AM' | 'DOUBTS' | 'ATTENDANCE';
 
@@ -84,6 +91,8 @@ export default function App() {
   const [enrollToast, setEnrollToast] = useState<string>('');
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
   const [armedAutoOpenIds, setArmedAutoOpenIds] = useState<string[]>([]);
+  const [activeAlarmSession, setActiveAlarmSession] = useState<LiveSession | null>(null);
+  const dismissedAlarmIdsRef = useRef<Set<string>>(new Set());
 
   const upcomingSectionRef = useRef<HTMLElement | null>(null);
   const enrollingIdsRef = useRef<Set<string>>(new Set());
@@ -186,11 +195,21 @@ export default function App() {
             );
             window.setTimeout(() => setEnrollToast(''), 6000);
 
+            // 1. Dispatch System & PWA Notification alert
+            dispatchSystemAlarmNotification(
+              `inspiro LIVE ALARM: ${s.chapterName || s.title}`,
+              'Scheduled revision is LIVE NOW! Click to enter live classroom before shutter locks.'
+            );
+
             if (armedAutoOpenRef.current.has(s.id) && !activePlayerRef.current) {
               setActivePlayer({
                 sessionId: s.id,
                 mode: PlaybackMode.LIVE,
               });
+            } else if (!activePlayerRef.current && !dismissedAlarmIdsRef.current.has(s.id)) {
+              // 2. Start insistent repeating alarm sound & show alarm modal until opened
+              startRepeatingClassroomAlarm();
+              setActiveAlarmSession(s);
             }
           }
 
@@ -535,6 +554,7 @@ export default function App() {
 
         {/* Zone 3: Night/Day Screen Switch + Lock Chapter CTA */}
         <div className="flex items-center gap-2.5 shrink-0">
+          <NotificationSettingsButton isNightMode={isNightMode} />
           <PWAInstallButton isNightMode={isNightMode} />
 
           <button
@@ -1533,7 +1553,32 @@ export default function App() {
           initialOrientationOverride={activePlayer.orientationOverride}
           onSessionUpdated={handleSessionUpdated}
           onSessionsListRefreshed={(all) => setSessions(all)}
-          onExit={() => setActivePlayer(null)}
+          onExit={() => {
+            stopRepeatingClassroomAlarm();
+            setActivePlayer(null);
+          }}
+        />
+      )}
+
+      {/* Live Alarm Modal: Rings repeating alarm until user enters classroom or dismisses */}
+      {activeAlarmSession && (
+        <LiveAlarmModal
+          session={activeAlarmSession}
+          onEnterLive={(session) => {
+            stopRepeatingClassroomAlarm();
+            setActiveAlarmSession(null);
+            setActivePlayer({
+              sessionId: session.id,
+              mode: PlaybackMode.LIVE,
+            });
+          }}
+          onDismiss={() => {
+            stopRepeatingClassroomAlarm();
+            if (activeAlarmSession) {
+              dismissedAlarmIdsRef.current.add(activeAlarmSession.id);
+            }
+            setActiveAlarmSession(null);
+          }}
         />
       )}
     </div>

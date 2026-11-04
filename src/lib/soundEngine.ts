@@ -71,3 +71,39 @@ export function playClassroomShutterLock(muted: boolean) {
   playTone(440, 0.22, 'triangle', 0.1, 0.15);
   playTone(329.63, 0.38, 'triangle', 0.12, 0.32);
 }
+
+let activeAlarmTimer: number | null = null;
+
+export function startRepeatingClassroomAlarm(): () => void {
+  stopRepeatingClassroomAlarm();
+  getAudioContext();
+
+  let step = 0;
+  const playPulse = () => {
+    // High-urgency alternating chime: 880Hz -> 1175Hz
+    const freq = step % 2 === 0 ? 880 : 1175;
+    playTone(freq, 0.18, 'triangle', 0.18, 0);
+    playTone(freq * 1.5, 0.12, 'sine', 0.08, 0.05);
+
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([200, 100, 200]);
+      } catch {
+        // ignore
+      }
+    }
+    step++;
+  };
+
+  playPulse();
+  activeAlarmTimer = window.setInterval(playPulse, 900);
+
+  return stopRepeatingClassroomAlarm;
+}
+
+export function stopRepeatingClassroomAlarm() {
+  if (activeAlarmTimer !== null) {
+    window.clearInterval(activeAlarmTimer);
+    activeAlarmTimer = null;
+  }
+}
