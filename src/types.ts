@@ -88,4 +88,5 @@ export interface LiveSession {
   finalizedAfterLive?: boolean;
   missedCooldownUntilMs?: number;
   recordedReplaysCount: number;
+  emergencyBreakSecondsUsed?: number; // up to 900s (15 min total bank for entire period)
 }

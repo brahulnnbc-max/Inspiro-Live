@@ -46,6 +46,7 @@ import { PdfThumbnail } from './components/PdfThumbnail';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { LiveAlarmModal } from './components/LiveAlarmModal';
 import { NotificationSettingsButton } from './components/NotificationSettingsButton';
+import { SpacedMasteryVisualization } from './components/SpacedMasteryVisualization';
 
 type ActiveTab = 'LIVE_HOME' | 'SPACED_6AM' | 'DOUBTS' | 'ATTENDANCE';
 
@@ -1017,35 +1018,11 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 4 Scientific Compression Intervals */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                {SPACED_REPETITION_STAGES.map((st) => {
-                  const sampleSec = Math.max(
-                    st.minSecondsPerSlide,
-                    Math.round(50 * st.timeRatio)
-                  );
-                  return (
-                    <div
-                      key={st.stage}
-                      className={`p-3.5 rounded-lg border ${subtleSurface}`}
-                    >
-                      <div className="flex items-center justify-between text-xs font-mono">
-                        <span className="font-bold text-[#FF0000]">
-                          +{st.intervalDays} Days
-                        </span>
-                        <span className={mutedText}>06:00 AM</span>
-                      </div>
-                      <div className="text-lg font-mono font-bold tabular-nums mt-1">
-                        {sampleSec}s / slide
-                      </div>
-                      <div className={`text-[11px] mt-0.5 ${mutedText}`}>
-                        {Math.round(st.timeRatio * 100)}% of first-read time (+
-                        {st.emergencySeconds}s hold)
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+              {/* Spaced Repetition Mastery & Neural Retention Gauge (Progress Visualization 4) */}
+              <SpacedMasteryVisualization
+                sessions={sessions}
+                isNightMode={isNightMode}
+              />
 
               {/* Quick Trigger for Active Revised Chapters */}
               {unqueuedPrimaryChapters.length > 0 && (

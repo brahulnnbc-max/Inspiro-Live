@@ -3,11 +3,13 @@ import {
   AlertTriangle,
   Bookmark,
   ChevronUp,
+  Coffee,
   Lock,
   Maximize2,
   Minimize2,
   Monitor,
   PauseCircle,
+  Play,
   RotateCw,
   Smartphone,
   Volume2,
@@ -107,6 +109,12 @@ export const LiveBroadcastPlayer: React.FC<LiveBroadcastPlayerProps> = ({
     h: 720,
   });
 
+  // 15-Minute Emergency Break Bank for the Entire Live Session
+  const [isEmergencyBreakActive, setIsEmergencyBreakActive] = useState<boolean>(false);
+  const emergencyBreakStartedAtRef = useRef<number | null>(null);
+  const [emergencyBreakElapsedSec, setEmergencyBreakElapsedSec] = useState<number>(0);
+  const [hourlyBreakSkippedUntilMs, setHourlyBreakSkippedUntilMs] = useState<number>(0);
+
   // Presence check ("Roll Call") every 8th slide
   const [activeRollCallSlide, setActiveRollCallSlide] = useState<number | null>(null);
   const handledRollCallSlidesRef = useRef<Set<number>>(new Set());
@@ -119,16 +127,24 @@ export const LiveBroadcastPlayer: React.FC<LiveBroadcastPlayerProps> = ({
   const sessionRef = useRef<LiveSession>(session);
   sessionRef.current = session;
 
-  // Build effective playback session (supports Doubt Live subset seamlessly)
+  // Build effective playback session (supports Doubt Live subset & live emergency break)
   const effectiveSession = useMemo<LiveSession>(() => {
+    let s = session;
     if (mode === PlaybackMode.DOUBT_LIVE && doubtSlidesOverride && doubtSlidesOverride.length > 0) {
-      return {
-        ...session,
+      s = {
+        ...s,
         slides: doubtSlidesOverride,
       };
     }
-    return session;
-  }, [session, mode, doubtSlidesOverride]);
+    if (isEmergencyBreakActive && emergencyBreakElapsedSec > 0) {
+      s = {
+        ...s,
+        emergencyBreakSecondsUsed:
+          (s.emergencyBreakSecondsUsed || 0) + emergencyBreakElapsedSec,
+      };
+    }
+    return s;
+  }, [session, mode, doubtSlidesOverride, isEmergencyBreakActive, emergencyBreakElapsedSec]);
 
   const anchorMs =
     mode === PlaybackMode.LIVE ? effectiveSession.scheduledStartMs : replayAnchorMs;
@@ -138,12 +154,20 @@ export const LiveBroadcastPlayer: React.FC<LiveBroadcastPlayerProps> = ({
   const isWaitingLobby =
     mode === PlaybackMode.LIVE && nowMs < effectiveSession.scheduledStartMs;
 
-  const pos = resolveLiveSlidePosition(
+  const rawPos = resolveLiveSlidePosition(
     effectiveSession,
     anchorMs,
     activeEmergencyMap,
     nowMs
   );
+
+  const isEffectiveHourlyBreak = Boolean(
+    rawPos.isHourlyBreak && nowMs >= hourlyBreakSkippedUntilMs
+  );
+
+  const pos = isEffectiveHourlyBreak
+    ? rawPos
+    : { ...rawPos, isHourlyBreak: false };
 
   // Schedule auto-minimize of full YouTube Live controls after 3.8s of reading
   const scheduleAutoMinimize = useCallback(() => {
@@ -476,6 +500,64 @@ export const LiveBroadcastPlayer: React.FC<LiveBroadcastPlayerProps> = ({
     onSessionUpdated,
   ]);
 
+  // 15-Minute Emergency Break Bank for Entire Lecture
+  const totalEmergencyUsed =
+    (effectiveSession.emergencyBreakSecondsUsed || 0) +
+    (isEmergencyBreakActive ? emergencyBreakElapsedSec : 0);
+  const remainingEmergencyBankSec = Math.max(0, 900 - totalEmergencyUsed);
+
+  const handleResumeFromEmergencyBreak = useCallback(async () => {
+    if (!emergencyBreakStartedAtRef.current) {
+      setIsEmergencyBreakActive(false);
+      return;
+    }
+    const elapsedSec = Math.floor((Date.now() - emergencyBreakStartedAtRef.current) / 1000);
+    const prevUsed = sessionRef.current.emergencyBreakSecondsUsed || 0;
+    const newTotal = Math.min(900, prevUsed + elapsedSec);
+
+    setIsEmergencyBreakActive(false);
+    emergencyBreakStartedAtRef.current = null;
+    setEmergencyBreakElapsedSec(0);
+
+    const updated = await appendSessionTelemetry(sessionRef.current.id, {
+      emergencyBreakSecondsUsed: newTotal,
+    });
+    if (updated) onSessionUpdated(updated);
+  }, [onSessionUpdated]);
+
+  const startEmergencyBreak = useCallback(() => {
+    keepControlsAwake();
+    if (isWaitingLobby || pos.ended || isEmergencyBreakActive) return;
+    const alreadyUsed = sessionRef.current.emergencyBreakSecondsUsed || 0;
+    if (alreadyUsed >= 900) return;
+
+    emergencyBreakStartedAtRef.current = Date.now();
+    setEmergencyBreakElapsedSec(0);
+    setIsEmergencyBreakActive(true);
+  }, [keepControlsAwake, isWaitingLobby, pos.ended, isEmergencyBreakActive]);
+
+  // Auto-track 15-minute emergency break timer
+  useEffect(() => {
+    if (!isEmergencyBreakActive) return;
+    const interval = window.setInterval(() => {
+      if (emergencyBreakStartedAtRef.current) {
+        const sec = Math.floor((Date.now() - emergencyBreakStartedAtRef.current) / 1000);
+        setEmergencyBreakElapsedSec(sec);
+        const prevUsed = sessionRef.current.emergencyBreakSecondsUsed || 0;
+        if (prevUsed + sec >= 900) {
+          handleResumeFromEmergencyBreak();
+        }
+      }
+    }, 500);
+    return () => window.clearInterval(interval);
+  }, [isEmergencyBreakActive, handleResumeFromEmergencyBreak]);
+
+  const skipHourlyBreakEarly = useCallback(() => {
+    if (pos.hourlyBreakRemainingMs) {
+      setHourlyBreakSkippedUntilMs(Date.now() + pos.hourlyBreakRemainingMs + 1000);
+    }
+  }, [pos.hourlyBreakRemainingMs]);
+
   // Resolve real parent slide index (for Doubt Live mode as well as normal Live mode)
   const currentSlide = effectiveSession.slides[pos.slideIndex];
   const parentSlideIndex =
@@ -769,6 +851,118 @@ export const LiveBroadcastPlayer: React.FC<LiveBroadcastPlayerProps> = ({
     );
   }
 
+  // 3. 15-MINUTE EMERGENCY BREAK SCREEN (Entire Lecture Bank)
+  if (isEmergencyBreakActive) {
+    const remM = Math.floor(remainingEmergencyBankSec / 60);
+    const remS = remainingEmergencyBankSec % 60;
+
+    return (
+      <div
+        ref={rootRef}
+        className="fixed inset-0 z-50 bg-[#09090B] text-white flex flex-col items-center justify-center p-6 select-none"
+      >
+        <div className="max-w-md w-full border border-amber-500/30 bg-[#141418] rounded-2xl p-6 sm:p-8 text-center space-y-6 shadow-2xl">
+          <div className="inline-flex items-center gap-2 bg-amber-500/15 border border-amber-500/30 text-amber-400 text-xs font-mono font-bold px-3 py-1.5 rounded-full">
+            <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            <span>15-MINUTE EMERGENCY BREAK ACTIVE</span>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs font-mono text-zinc-400">
+              {effectiveSession.chapterName || effectiveSession.title} · Slide {pos.slideIndex + 1}
+            </p>
+            <h2 className="text-xl sm:text-2xl font-bold text-white">
+              Live Classroom On Hold
+            </h2>
+            <p className="text-xs text-zinc-400 leading-relaxed max-w-sm mx-auto">
+              You have a total 15-minute emergency break allowance for this entire lecture. Your slides will resume exactly where you paused.
+            </p>
+          </div>
+
+          <div className="py-4 border-y border-white/10 space-y-1">
+            <div className="text-4xl sm:text-5xl font-mono font-extrabold text-amber-400 tabular-nums">
+              {String(remM).padStart(2, '0')}:{String(remS).padStart(2, '0')}
+            </div>
+            <p className="text-[11px] font-mono text-zinc-400">
+              Remaining in your 15-minute emergency bank
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <button
+              type="button"
+              onClick={handleResumeFromEmergencyBreak}
+              className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-sm rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              <span>Resume Live Classroom</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmExitBanner(true)}
+              className="text-xs text-zinc-400 hover:text-zinc-200 transition-colors py-1 cursor-pointer"
+            >
+              Leave Live Stream
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 4. HOURLY 5-MINUTE INTERMISSION SCREEN ("1 hour after 5 min break")
+  if (isEffectiveHourlyBreak) {
+    const breakRemSec = Math.max(0, Math.ceil((pos.hourlyBreakRemainingMs || 0) / 1000));
+    const remM = Math.floor(breakRemSec / 60);
+    const remS = breakRemSec % 60;
+
+    return (
+      <div
+        ref={rootRef}
+        className="fixed inset-0 z-50 bg-[#09090B] text-white flex flex-col items-center justify-center p-6 select-none"
+      >
+        <div className="max-w-md w-full border border-blue-500/30 bg-[#12131A] rounded-2xl p-6 sm:p-8 text-center space-y-6 shadow-2xl">
+          <div className="inline-flex items-center gap-2 bg-blue-500/15 border border-blue-500/30 text-blue-400 text-xs font-mono font-bold px-3 py-1.5 rounded-full">
+            <Coffee className="w-3.5 h-3.5" />
+            <span>HOURLY INTERMISSION · 5-MINUTE BREAK</span>
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-xl sm:text-2xl font-bold text-white">
+              Hydrate & Rest Your Eyes
+            </h2>
+            <p className="text-xs text-zinc-400 leading-relaxed max-w-sm mx-auto">
+              1 hour of continuous study completed. Look 20 feet away to relax eye muscles, drink water, and stand up. Next slide opens automatically when break finishes.
+            </p>
+          </div>
+
+          <div className="py-4 border-y border-white/10 space-y-1">
+            <div className="text-4xl sm:text-5xl font-mono font-extrabold text-blue-400 tabular-nums">
+              {String(remM).padStart(2, '0')}:{String(remS).padStart(2, '0')}
+            </div>
+            <p className="text-[11px] font-mono text-zinc-400">
+              5-minute intermission countdown
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <button
+              type="button"
+              onClick={skipHourlyBreakEarly}
+              className="w-full py-3 bg-white/10 hover:bg-white/15 border border-white/20 text-white font-semibold text-xs rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Skip Break & Continue Lecture</span>
+            </button>
+            <p className="text-[10px] font-mono text-zinc-400">
+              Auto-resumes in {remM}:{String(remS).padStart(2, '0')}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // 3A. VERTICAL REAL-FRAME MODE (Flipkart Live / YouTube Vertical Live — Fullscreen Slide + Tap-to-Show HUD)
   if (orientation === BroadcastOrientation.VERTICAL) {
     return (
@@ -899,6 +1093,25 @@ export const LiveBroadcastPlayer: React.FC<LiveBroadcastPlayerProps> = ({
 
               {/* Right-Edge Flipkart / YT Vertical Live Action Stack */}
               <div className="absolute right-3 bottom-20 z-20 flex flex-col items-center gap-2.5">
+                <button
+                  type="button"
+                  disabled={remainingEmergencyBankSec <= 0}
+                  onClick={startEmergencyBreak}
+                  className={`flex flex-col items-center justify-center w-12 h-12 rounded-full border shadow-lg cursor-pointer ${
+                    remainingEmergencyBankSec <= 0
+                      ? 'bg-zinc-900/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                      : 'bg-amber-600 hover:bg-amber-500 border-amber-300 text-white'
+                  }`}
+                  title="15-Minute Emergency Break for Entire Lecture"
+                >
+                  <Coffee className="w-5 h-5" />
+                  <span className="text-[8px] font-mono font-bold leading-none mt-0.5">
+                    {remainingEmergencyBankSec <= 0
+                      ? '0m'
+                      : `${Math.ceil(remainingEmergencyBankSec / 60)}m`}
+                  </span>
+                </button>
+
                 <button
                   type="button"
                   disabled={emergencyAlreadyUsedOnSlide}
@@ -1305,8 +1518,27 @@ export const LiveBroadcastPlayer: React.FC<LiveBroadcastPlayerProps> = ({
                 </span>
               </div>
 
-              {/* Right: Emergency +45s, Doubt, Rotate 90°, Fit/Fill, Sound, Fullscreen */}
+              {/* Right: Emergency 15m Break, Emergency +45s, Doubt, Rotate 90°, Fit/Fill, Sound, Fullscreen */}
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={remainingEmergencyBankSec <= 0}
+                  onClick={startEmergencyBreak}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                    remainingEmergencyBankSec <= 0
+                      ? 'bg-white/5 text-zinc-500 border border-white/10 cursor-not-allowed'
+                      : 'bg-amber-600/30 hover:bg-amber-600/40 border border-amber-500/50 text-amber-300'
+                  }`}
+                  title="15-minute emergency break allowance for the entire lecture"
+                >
+                  <Coffee className="w-3.5 h-3.5" />
+                  <span>
+                    {remainingEmergencyBankSec <= 0
+                      ? '15m Bank Expired'
+                      : `15m Break (${Math.floor(remainingEmergencyBankSec / 60)}:${String(remainingEmergencyBankSec % 60).padStart(2, '0')})`}
+                  </span>
+                </button>
+
                 <button
                   type="button"
                   disabled={emergencyAlreadyUsedOnSlide}

@@ -260,6 +260,7 @@ export interface LiveTelemetryPatch {
   missedCooldownUntilMs?: number;
   recordedReplaysCount?: number;
   spacedScheduleGenerated?: boolean;
+  emergencyBreakSecondsUsed?: number;
 }
 
 function mergeSessionTelemetry(
@@ -300,6 +301,10 @@ function mergeSessionTelemetry(
     finalizedAfterLive: patch.finalizedAfterLive ?? existing.finalizedAfterLive,
     missedCooldownUntilMs: patch.missedCooldownUntilMs ?? existing.missedCooldownUntilMs,
     recordedReplaysCount: patch.recordedReplaysCount ?? existing.recordedReplaysCount,
+    emergencyBreakSecondsUsed:
+      patch.emergencyBreakSecondsUsed !== undefined
+        ? Math.min(900, Math.max(0, patch.emergencyBreakSecondsUsed))
+        : existing.emergencyBreakSecondsUsed ?? 0,
   };
 }
 
@@ -384,6 +389,10 @@ export async function enrollChapterInMorningSpacedRepetition(
   return await listAllSessions();
 }
 
+export const HOURLY_BREAK_INTERVAL_SEC = 3600; // 1 hour of continuous lecture
+export const HOURLY_BREAK_DURATION_SEC = 300; // 5 minute intermission
+export const MAX_EMERGENCY_BREAK_SEC = 900; // 15 minute emergency break bank for entire period
+
 export function getEffectiveLiveEndMs(session: LiveSession): number {
   let totalSec = 0;
   for (let i = 0; i < session.slides.length; i++) {
@@ -392,8 +401,20 @@ export function getEffectiveLiveEndMs(session: LiveSession): number {
       totalSec += session.emergencySecondsPerSlide;
     }
   }
+
+  // 1 hour after 5 min break: Add 5-minute intermission for every 60 min of lecturing
+  const hourlyBreaksCount = Math.floor(totalSec / HOURLY_BREAK_INTERVAL_SEC);
+  totalSec += hourlyBreaksCount * HOURLY_BREAK_DURATION_SEC;
+
+  // Add 15-minute emergency break used (up to 900s)
+  const emergencyBreakSec = Math.min(
+    MAX_EMERGENCY_BREAK_SEC,
+    session.emergencyBreakSecondsUsed || 0
+  );
+  totalSec += emergencyBreakSec;
+
   const streamEnd = session.scheduledStartMs + totalSec * 1000;
-  return Math.min(streamEnd, session.hardCloseMs);
+  return Math.max(streamEnd, session.hardCloseMs + emergencyBreakSec * 1000);
 }
 
 export function computeSessionWallState(
@@ -420,63 +441,106 @@ export function computeSessionWallState(
   return ComputedClassState.RECORDED_READY;
 }
 
-export function resolveLiveSlidePosition(
-  session: LiveSession,
-  anchorStartMs: number,
-  emergencyMap: Record<number, number>,
-  nowMs: number
-): {
+export interface LiveSlidePosition {
   ended: boolean;
   slideIndex: number;
   slideElapsedMs: number;
   slideTotalMs: number;
   slideRemainingMs: number;
   inEmergencyWindow: boolean;
-} {
-  const hardLimitMs =
-    anchorStartMs === session.scheduledStartMs
-      ? session.hardCloseMs
-      : anchorStartMs +
-        session.slides.length *
-          (session.baseSecondsPerSlide + session.emergencySecondsPerSlide) *
-          1000;
+  isHourlyBreak?: boolean;
+  hourlyBreakRemainingMs?: number;
+  hourlyBreakTotalMs?: number;
+  nextHourlyBreakInMs?: number;
+}
 
-  if (nowMs >= hardLimitMs) {
-    return {
-      ended: true,
-      slideIndex: Math.max(0, session.slides.length - 1),
-      slideElapsedMs: 0,
-      slideTotalMs: session.baseSecondsPerSlide * 1000,
-      slideRemainingMs: 0,
-      inEmergencyWindow: false,
-    };
-  }
+export function resolveLiveSlidePosition(
+  session: LiveSession,
+  anchorStartMs: number,
+  emergencyMap: Record<number, number>,
+  nowMs: number
+): LiveSlidePosition {
+  const emergencyBreakOffsetMs = Math.min(
+    MAX_EMERGENCY_BREAK_SEC * 1000,
+    (session.emergencyBreakSecondsUsed || 0) * 1000
+  );
+  const adjustedAnchorMs = anchorStartMs + emergencyBreakOffsetMs;
 
-  let cursorMs = anchorStartMs;
+  let cursorMs = adjustedAnchorMs;
+  let accumulatedLectureSec = 0;
+  let nextHourlyBreakSec = HOURLY_BREAK_INTERVAL_SEC;
+
   for (let i = 0; i < session.slides.length; i++) {
     const hasEmergency = Boolean(emergencyMap[i]);
     const slideDurationSec =
       session.baseSecondsPerSlide +
       (hasEmergency ? session.emergencySecondsPerSlide : 0);
     const slideDurationMs = slideDurationSec * 1000;
-    const nextCursorMs = Math.min(cursorMs + slideDurationMs, hardLimitMs);
+
+    // Check if an hourly 5-minute break occurs before or at the start of this slide
+    if (accumulatedLectureSec >= nextHourlyBreakSec) {
+      const breakStartMs = cursorMs;
+      const breakEndMs = breakStartMs + HOURLY_BREAK_DURATION_SEC * 1000;
+      if (nowMs < breakEndMs) {
+        return {
+          ended: false,
+          slideIndex: i,
+          slideElapsedMs: Math.max(0, nowMs - breakStartMs),
+          slideTotalMs: HOURLY_BREAK_DURATION_SEC * 1000,
+          slideRemainingMs: Math.max(0, breakEndMs - nowMs),
+          inEmergencyWindow: false,
+          isHourlyBreak: true,
+          hourlyBreakRemainingMs: Math.max(0, breakEndMs - nowMs),
+          hourlyBreakTotalMs: HOURLY_BREAK_DURATION_SEC * 1000,
+        };
+      }
+      cursorMs = breakEndMs;
+      nextHourlyBreakSec += HOURLY_BREAK_INTERVAL_SEC;
+    }
+
+    const nextCursorMs = cursorMs + slideDurationMs;
 
     if (nowMs < nextCursorMs) {
       const slideElapsedMs = Math.max(0, nowMs - cursorMs);
       const slideRemainingMs = Math.max(0, nextCursorMs - nowMs);
       const inEmergencyWindow = slideElapsedMs >= session.baseSecondsPerSlide * 1000;
+      const nextBreakInSec = Math.max(0, nextHourlyBreakSec - accumulatedLectureSec);
+
       return {
         ended: false,
         slideIndex: i,
         slideElapsedMs,
-        slideTotalMs: nextCursorMs - cursorMs,
+        slideTotalMs: slideDurationMs,
         slideRemainingMs,
         inEmergencyWindow,
+        isHourlyBreak: false,
+        nextHourlyBreakInMs: nextBreakInSec * 1000,
       };
     }
 
     cursorMs = nextCursorMs;
-    if (cursorMs >= hardLimitMs) break;
+    accumulatedLectureSec += slideDurationSec;
+
+    // Check if the hourly break falls right after this slide ended
+    if (accumulatedLectureSec >= nextHourlyBreakSec && i < session.slides.length - 1) {
+      const breakStartMs = cursorMs;
+      const breakEndMs = breakStartMs + HOURLY_BREAK_DURATION_SEC * 1000;
+      if (nowMs < breakEndMs) {
+        return {
+          ended: false,
+          slideIndex: i + 1,
+          slideElapsedMs: Math.max(0, nowMs - breakStartMs),
+          slideTotalMs: HOURLY_BREAK_DURATION_SEC * 1000,
+          slideRemainingMs: Math.max(0, breakEndMs - nowMs),
+          inEmergencyWindow: false,
+          isHourlyBreak: true,
+          hourlyBreakRemainingMs: Math.max(0, breakEndMs - nowMs),
+          hourlyBreakTotalMs: HOURLY_BREAK_DURATION_SEC * 1000,
+        };
+      }
+      cursorMs = breakEndMs;
+      nextHourlyBreakSec += HOURLY_BREAK_INTERVAL_SEC;
+    }
   }
 
   return {
@@ -486,5 +550,6 @@ export function resolveLiveSlidePosition(
     slideTotalMs: session.baseSecondsPerSlide * 1000,
     slideRemainingMs: 0,
     inEmergencyWindow: false,
+    isHourlyBreak: false,
   };
 }
