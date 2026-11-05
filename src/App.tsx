@@ -47,8 +47,9 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { LiveAlarmModal } from './components/LiveAlarmModal';
 import { NotificationSettingsButton } from './components/NotificationSettingsButton';
 import { SpacedMasteryVisualization } from './components/SpacedMasteryVisualization';
+import { MasterTrackerSheet } from './components/MasterTrackerSheet';
 
-type ActiveTab = 'LIVE_HOME' | 'SPACED_6AM' | 'DOUBTS' | 'ATTENDANCE';
+type ActiveTab = 'LIVE_HOME' | 'SPACED_6AM' | 'TRACKER' | 'DOUBTS' | 'ATTENDANCE';
 
 function formatCountdown(ms: number): string {
   const sec = Math.max(0, Math.ceil(ms / 1000));
@@ -531,6 +532,18 @@ export default function App() {
 
           <button
             type="button"
+            onClick={() => setActiveTab('TRACKER')}
+            className={`py-1 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeTab === 'TRACKER'
+                ? 'border-[#FF0000] font-semibold'
+                : `border-transparent ${mutedText}`
+            }`}
+          >
+            Tracker
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('DOUBTS')}
             className={`py-1 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'DOUBTS'
@@ -604,6 +617,7 @@ export default function App() {
               'SPACED_6AM',
               `6 AM Re-Revision${spacedCountBadge > 0 ? ` (${spacedCountBadge})` : ''}`,
             ],
+            ['TRACKER', 'Tracker'],
             [
               'DOUBTS',
               `Doubts${chaptersWithDoubts.length > 0 ? ` (${chaptersWithDoubts.length})` : ''}`,
@@ -1323,6 +1337,20 @@ export default function App() {
               )}
             </section>
           </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* TAB: MASTER STUDY TRACKER SHEET (Horizontal Scroll Ledger)        */}
+        {/* ================================================================= */}
+        {activeTab === 'TRACKER' && (
+          <MasterTrackerSheet
+            sessions={sessions}
+            isNightMode={isNightMode}
+            onOpenScheduleModal={() => setIsScheduleOpen(true)}
+            onOpenSession={(id) => {
+              setActivePlayer({ sessionId: id, mode: PlaybackMode.LIVE });
+            }}
+          />
         )}
 
         {/* ================================================================= */}
