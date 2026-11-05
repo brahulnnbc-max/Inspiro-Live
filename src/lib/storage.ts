@@ -149,10 +149,19 @@ export async function loadAndNormalizeClassroomSessions(
       s.id.startsWith('weak_live_') ||
       s.id.startsWith('trial_');
 
-    if (isLegacySplit) {
-      for (const idx of s.starredSlideIndices) {
-        const p = s.slides[idx]?.pdfPageNumber;
-        if (p) preservedDoubtPdfPages.add(p);
+    // Purge any doubt telecasts from the 6 AM revision section (doubts belong strictly in Doubts tab)
+    const isDoubtTelecastSession =
+      s.isDoubtTelecast === true ||
+      s.id.startsWith('spaced_doubt_') ||
+      (s.category === SessionCategory.SPACED_REVISION &&
+        (s.title.includes('· Doubts') || s.title.includes('Doubts')));
+
+    if (isLegacySplit || isDoubtTelecastSession) {
+      if (!isDoubtTelecastSession) {
+        for (const idx of s.starredSlideIndices) {
+          const p = s.slides[idx]?.pdfPageNumber;
+          if (p) preservedDoubtPdfPages.add(p);
+        }
       }
       await deleteSessionByIdInternal(s.id);
     } else {
@@ -336,14 +345,16 @@ export async function appendSessionTelemetry(
  */
 export async function enrollChapterInMorningSpacedRepetition(
   chapterSessionId: string,
-  completedAtMs: number = Date.now()
+  completedAtMs: number = Date.now(),
+  forceEnroll: boolean = false
 ): Promise<LiveSession[]> {
   const all = await listAllSessions();
   const source = all.find((s) => s.id === chapterSessionId);
   if (
     !source ||
     source.category === SessionCategory.SPACED_REVISION ||
-    source.spacedScheduleGenerated
+    source.spacedScheduleGenerated ||
+    (!forceEnroll && (!source.attendedSlides || source.attendedSlides.length === 0))
   ) {
     return all;
   }

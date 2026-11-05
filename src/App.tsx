@@ -329,7 +329,8 @@ export default function App() {
     setConfirmEnrollChapterId(null);
     const updatedAll = await enrollChapterInMorningSpacedRepetition(
       chapter.id,
-      Date.now()
+      Date.now(),
+      true
     );
     setSessions(updatedAll);
     setEnrollToast(
@@ -1011,7 +1012,7 @@ export default function App() {
                     6:00 AM Scientific Re-Revision Stream
                   </h1>
                   <p className={`text-xs max-w-2xl leading-relaxed ${mutedText}`}>
-                    Every revised chapter automatically schedules itself into future 6:00 AM live broadcasts right before the forgetting curve drops—with scientifically compressed slide durations as neural recall accelerates.
+                    Every attended live chapter automatically schedules into future 6:00 AM live broadcasts right before the forgetting curve drops (+3d, +7d, +21d, +45d)—with scientifically compressed slide durations. Revisions never clash: if two chapters align on the same morning, the schedule automatically shifts to the next day at 6:00 AM. Doubts stay safely organized in your Doubts section.
                   </p>
                 </div>
               </div>
@@ -1229,9 +1230,7 @@ export default function App() {
                           <div className="relative z-10 h-full bg-gradient-to-t from-black/95 via-black/55 to-black/80 p-3.5 flex flex-col justify-between">
                             <div className="flex items-center justify-between gap-2">
                               <span className="bg-amber-500 text-zinc-950 text-[11px] font-extrabold tracking-wider px-2 py-0.5 rounded">
-                                {session.isDoubtTelecast
-                                  ? `DAY +${session.repetitionIntervalDays} DOUBTS`
-                                  : `DAY +${session.repetitionIntervalDays} · ${session.baseSecondsPerSlide}s/SLIDE`}
+                                DAY +{session.repetitionIntervalDays} · {session.baseSecondsPerSlide}s/SLIDE
                               </span>
                               <span className="flex items-center gap-1 text-[11px] font-mono text-amber-300">
                                 <Lock className="w-3 h-3" />

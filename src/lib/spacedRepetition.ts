@@ -70,30 +70,35 @@ function resolveNonOverlappingMorningSlot(
   occupiedWindows: Array<{ startMs: number; endMs: number }>
 ): number {
   let candidateStart = desiredStartMs;
-  const sorted = [...occupiedWindows].sort((a, b) => a.startMs - b.startMs);
-
-  let shifted = true;
   let guard = 0;
-  while (shifted && guard < 100) {
-    shifted = false;
+  let hasOverlap = true;
+
+  while (hasOverlap && guard < 365) {
+    hasOverlap = false;
     guard += 1;
-    for (const win of sorted) {
-      const candidateEnd = candidateStart + estimatedBaseRunMs;
+    const candidateEnd = candidateStart + estimatedBaseRunMs;
+
+    for (const win of occupiedWindows) {
       const overlaps = candidateStart < win.endMs && candidateEnd > win.startMs;
       if (overlaps) {
-        // Queue cleanly 5 minutes after the earlier 6:00 AM morning class finishes
-        candidateStart = win.endMs + 5 * 60 * 1000;
-        shifted = true;
+        // User requirement: No revisions should clash. If clashing, manage by scheduling for the next day at 06:00 AM.
+        const nextDay = new Date(candidateStart);
+        nextDay.setDate(nextDay.getDate() + 1);
+        nextDay.setHours(FIXED_MORNING_REVISION_HOUR, FIXED_MORNING_REVISION_MINUTE, 0, 0);
+        candidateStart = nextDay.getTime();
+        hasOverlap = true;
+        break;
       }
     }
   }
+
   return candidateStart;
 }
 
 /**
  * Generates the automatic 06:00 AM Spaced Repetition live sessions (+3d, +7d, +21d, +45d)
- * with scientifically reduced per-slide times, plus an automatic Day +3 & Day +7 Morning Doubt
- * Re-Telecast when the chapter has flagged doubts.
+ * with scientifically reduced per-slide times.
+ * Note: Doubts are strictly kept in the dedicated Doubts section and NOT scheduled here.
  */
 export function buildSpacedRepetitionSessionsForChapter(
   sourceSession: LiveSession,
@@ -164,70 +169,6 @@ export function buildSpacedRepetitionSessionsForChapter(
     };
 
     created.push(spacedSession);
-  }
-
-  // Idea #4: If the chapter also had flagged Doubts, auto-schedule Day +3 & Day +7 Doubt Live Re-Telecasts in the 6 AM slot!
-  if (sourceSession.starredSlideIndices.length > 0) {
-    const sortedIndices = [...sourceSession.starredSlideIndices].sort(
-      (a, b) => a - b
-    );
-    const doubtSlides: SlideDescriptor[] = [];
-    sortedIndices.forEach((origIdx) => {
-      const sl = sourceSession.slides[origIdx];
-      if (sl) {
-        doubtSlides.push({
-          ...sl,
-          index: doubtSlides.length,
-          originalSlideIndex: origIdx,
-        });
-      }
-    });
-
-    if (doubtSlides.length > 0) {
-      for (const [idx, days] of [3, 7].entries()) {
-        const doubtSec = idx === 0 ? 35 : 25;
-        const emergSec = 25;
-        const rawMorningMs = computeMorning6AmTimestamp(completedAtMs, days);
-        const baseRunMs = doubtSlides.length * doubtSec * 1000;
-        const finalStartMs = resolveNonOverlappingMorningSlot(
-          rawMorningMs,
-          baseRunMs,
-          occupiedWindows
-        );
-        occupiedWindows.push({
-          startMs: finalStartMs,
-          endMs: finalStartMs + baseRunMs,
-        });
-
-        created.push({
-          id: `spaced_doubt_${sourceSession.id}_d${days}_${now}`,
-          title: `${chapterName} · Doubts`,
-          subject: sourceSession.subject,
-          chapterName,
-          scheduledStartMs: finalStartMs,
-          baseSecondsPerSlide: doubtSec,
-          emergencySecondsPerSlide: emergSec,
-          hardCloseMs:
-            finalStartMs + doubtSlides.length * (doubtSec + emergSec) * 1000,
-          defaultOrientation: sourceSession.defaultOrientation,
-          slides: doubtSlides,
-          lockedAtMs: now,
-          category: SessionCategory.SPACED_REVISION,
-          parentChapterId: sourceSession.id,
-          repetitionStage: idx + 1,
-          repetitionIntervalDays: days,
-          isDoubtTelecast: true,
-          emergencyUsedBySlide: {},
-          attendedSlides: [],
-          lateMissedSlides: [],
-          starredSlideIndices: [],
-          presenceChecksPassed: 0,
-          presenceChecksMissed: 0,
-          tabSwitchCount: 0,
-          recordedReplaysCount: 0,
-        });
-      }
-    }
   }
 
   return created;
